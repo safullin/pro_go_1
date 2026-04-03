@@ -3,14 +3,18 @@ package server
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/safullin/pro_go_1/internal/handler"
 	"github.com/safullin/pro_go_1/internal/repository"
 )
 
-// NewServer собирает HTTP-сервер приложения на стандартном роутере.
+// NewServer собирает HTTP-сервер приложения на chi.
 func NewServer(storage repository.MetricsRepository) http.Handler {
-	mux := http.NewServeMux()
+	router := chi.NewRouter()
 	metricsHandler := handler.NewMetricsHandler(storage)
-	mux.HandleFunc("/update/", metricsHandler.UpdateMetric)
-	return mux
+	router.Post("/update/{type}/{name}/{value}", metricsHandler.UpdateMetric)
+	router.Get("/value/{type}/{name}", metricsHandler.GetMetricValue)
+	router.Get("/", metricsHandler.ListMetrics)
+	return router
 }

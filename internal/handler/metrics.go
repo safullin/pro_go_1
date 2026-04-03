@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"html"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/safullin/pro_go_1/internal/model"
 	"github.com/safullin/pro_go_1/internal/repository"
@@ -21,24 +25,9 @@ func NewMetricsHandler(storage repository.MetricsRepository) *MetricsHandler {
 
 // UpdateMetric обрабатывает POST /update/{type}/{name}/{value}.
 func (h *MetricsHandler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "invalid method", http.StatusBadRequest)
-		return
-	}
-
-	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/update/"), "/"), "/")
-	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		http.NotFound(w, r)
-		return
-	}
-	if len(parts) < 3 || parts[2] == "" {
-		http.Error(w, "invalid metric value", http.StatusBadRequest)
-		return
-	}
-
-	metricType := parts[0]
-	metricName := parts[1]
-	rawValue := parts[2]
+	metricType := chi.URLParam(r, "type")
+	metricName := chi.URLParam(r, "name")
+	rawValue := chi.URLParam(r, "value")
 
 	switch metricType {
 	case model.Gauge:
@@ -62,4 +51,57 @@ func (h *MetricsHandler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
+}
+
+// GetMetricValue возвращает текущее значение метрики в text/plain.
+func (h *MetricsHandler) GetMetricValue(w http.ResponseWriter, r *http.Request) {
+	metricType := chi.URLParam(r, "type")
+	metricName := chi.URLParam(r, "name")
+
+	var value string
+	switch metricType {
+	case model.Gauge:
+		gauge, ok := h.storage.GetGauge(metricName)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		value = strconv.FormatFloat(gauge, 'f', -1, 64)
+	case model.Counter:
+		counter, ok := h.storage.GetCounter(metricName)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		value = strconv.FormatInt(counter, 10)
+	default:
+		http.Error(w, "unknown metric type", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, value)
+}
+
+// ListMetrics отдаёт HTML-страницу со списком известных метрик.
+func (h *MetricsHandler) ListMetrics(w http.ResponseWriter, _ *http.Request) {
+	metrics := h.storage.List()
+
+	var body strings.Builder
+	body.WriteString("<!DOCTYPE html><html><head><title>Metrics</title></head><body><h1>Metrics</h1><ul>")
+	for _, metric := range metrics {
+		body.WriteString("<li>")
+		body.WriteString(html.EscapeString(metric.Type))
+		body.WriteString(" ")
+		body.WriteString(html.EscapeString(metric.Name))
+		body.WriteString(": ")
+		body.WriteString(html.EscapeString(metric.Value))
+		body.WriteString("</li>")
+	}
+	body.WriteString("</ul></body></html>")
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, body.String())
 }
