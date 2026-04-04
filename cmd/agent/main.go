@@ -2,17 +2,23 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/safullin/pro_go_1/internal/agent"
+	"github.com/safullin/pro_go_1/internal/config"
 )
 
 func main() {
+	cfg, err := config.ParseAgentConfig(os.Args[1:])
+	if err != nil {
+		os.Exit(2)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	metricsAgent := agent.New("http://localhost:8080", 2*time.Second, 10*time.Second)
+	metricsAgent := agent.New(cfg.Address, cfg.PollInterval, cfg.ReportInterval)
 	metricsAgent.Run(ctx)
 }

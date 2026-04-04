@@ -45,7 +45,7 @@ type Agent struct {
 // New создаёт нового агента.
 func New(address string, pollInterval, reportInterval time.Duration) *Agent {
 	return &Agent{
-		address:        strings.TrimRight(address, "/"),
+		address:        normalizeAddress(address),
 		pollInterval:   pollInterval,
 		reportInterval: reportInterval,
 		client: &http.Client{
@@ -56,6 +56,13 @@ func New(address string, pollInterval, reportInterval time.Duration) *Agent {
 		gauges:      make(map[string]float64),
 		counters:    make(map[string]int64),
 	}
+}
+
+func normalizeAddress(address string) string {
+	if strings.HasPrefix(address, "http://") || strings.HasPrefix(address, "https://") {
+		return strings.TrimRight(address, "/")
+	}
+	return "http://" + strings.TrimRight(address, "/")
 }
 
 // Run запускает циклы обновления и отправки метрик.
