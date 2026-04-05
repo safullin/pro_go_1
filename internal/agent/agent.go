@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/safullin/pro_go_1/internal/model"
@@ -45,7 +44,7 @@ type Agent struct {
 // New создаёт нового агента.
 func New(address string, pollInterval, reportInterval time.Duration) *Agent {
 	return &Agent{
-		address:        strings.TrimRight(address, "/"),
+		address:        address,
 		pollInterval:   pollInterval,
 		reportInterval: reportInterval,
 		client: &http.Client{
