@@ -2,6 +2,9 @@ package config
 
 import (
 	"flag"
+	"fmt"
+	"io"
+	"strings"
 	"time"
 )
 
@@ -30,6 +33,7 @@ func ParseServerConfig(args []string) (ServerConfig, error) {
 	}
 
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	fs.StringVar(&cfg.Address, "a", cfg.Address, "HTTP server address")
 
 	if err := fs.Parse(args); err != nil {
@@ -51,6 +55,7 @@ func ParseAgentConfig(args []string) (AgentConfig, error) {
 	}
 
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	fs.StringVar(&cfg.Address, "a", cfg.Address, "HTTP server address")
 	fs.IntVar(&reportIntervalSeconds, "r", reportIntervalSeconds, "report interval in seconds")
 	fs.IntVar(&pollIntervalSeconds, "p", pollIntervalSeconds, "poll interval in seconds")
@@ -58,9 +63,23 @@ func ParseAgentConfig(args []string) (AgentConfig, error) {
 	if err := fs.Parse(args); err != nil {
 		return AgentConfig{}, err
 	}
+	if reportIntervalSeconds <= 0 {
+		return AgentConfig{}, fmt.Errorf("report interval must be positive")
+	}
+	if pollIntervalSeconds <= 0 {
+		return AgentConfig{}, fmt.Errorf("poll interval must be positive")
+	}
 
+	cfg.Address = normalizeHTTPAddress(cfg.Address)
 	cfg.ReportInterval = time.Duration(reportIntervalSeconds) * time.Second
 	cfg.PollInterval = time.Duration(pollIntervalSeconds) * time.Second
 
 	return cfg, nil
+}
+
+func normalizeHTTPAddress(address string) string {
+	if strings.HasPrefix(address, "http://") || strings.HasPrefix(address, "https://") {
+		return strings.TrimRight(address, "/")
+	}
+	return "http://" + strings.TrimRight(address, "/")
 }

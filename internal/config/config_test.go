@@ -63,7 +63,7 @@ func TestParseAgentConfig(t *testing.T) {
 			name: "defaults",
 			args: nil,
 			want: AgentConfig{
-				Address:        DefaultAddress,
+				Address:        "http://" + DefaultAddress,
 				ReportInterval: 10 * time.Second,
 				PollInterval:   2 * time.Second,
 			},
@@ -72,10 +72,29 @@ func TestParseAgentConfig(t *testing.T) {
 			name: "custom values",
 			args: []string{"-a=localhost:9090", "-r=3", "-p=1"},
 			want: AgentConfig{
-				Address:        "localhost:9090",
+				Address:        "http://localhost:9090",
 				ReportInterval: 3 * time.Second,
 				PollInterval:   1 * time.Second,
 			},
+		},
+		{
+			name: "keeps scheme and trims slash",
+			args: []string{"-a=http://localhost:9090/"},
+			want: AgentConfig{
+				Address:        "http://localhost:9090",
+				ReportInterval: 10 * time.Second,
+				PollInterval:   2 * time.Second,
+			},
+		},
+		{
+			name:    "zero report interval",
+			args:    []string{"-r=0"},
+			wantErr: true,
+		},
+		{
+			name:    "negative poll interval",
+			args:    []string{"-p=-1"},
+			wantErr: true,
 		},
 		{
 			name:    "unknown flag",
