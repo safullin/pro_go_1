@@ -96,3 +96,58 @@ func (s *MemStorage) List() []model.StoredMetric {
 
 	return metrics
 }
+
+// Snapshot возвращает все метрики в JSON-совместимом виде.
+func (s *MemStorage) Snapshot() []model.Metrics {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	metrics := make([]model.Metrics, 0, len(s.gauges)+len(s.counters))
+	for name, value := range s.gauges {
+		value := value
+		metrics = append(metrics, model.Metrics{
+			ID:    name,
+			MType: model.Gauge,
+			Value: &value,
+		})
+	}
+	for name, value := range s.counters {
+		value := value
+		metrics = append(metrics, model.Metrics{
+			ID:    name,
+			MType: model.Counter,
+			Delta: &value,
+		})
+	}
+
+	sort.Slice(metrics, func(i, j int) bool {
+		if metrics[i].MType == metrics[j].MType {
+			return metrics[i].ID < metrics[j].ID
+		}
+		return metrics[i].MType < metrics[j].MType
+	})
+
+	return metrics
+}
+
+// Restore загружает метрики в память, заменяя текущее состояние.
+func (s *MemStorage) Restore(metrics []model.Metrics) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.gauges = make(map[string]float64)
+	s.counters = make(map[string]int64)
+
+	for _, metric := range metrics {
+		switch metric.MType {
+		case model.Gauge:
+			if metric.Value != nil {
+				s.gauges[metric.ID] = *metric.Value
+			}
+		case model.Counter:
+			if metric.Delta != nil {
+				s.counters[metric.ID] = *metric.Delta
+			}
+		}
+	}
+}

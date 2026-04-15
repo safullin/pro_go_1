@@ -24,25 +24,49 @@ func TestParseServerConfig(t *testing.T) {
 			name: "defaults",
 			args: nil,
 			want: ServerConfig{
-				Address: DefaultAddress,
+				Address:         DefaultAddress,
+				StoreInterval:   DefaultStoreInterval,
+				FileStoragePath: DefaultFileStoragePath,
+				Restore:         DefaultRestore,
 			},
 		},
 		{
 			name: "custom address",
-			args: []string{"-a=localhost:9090"},
+			args: []string{"-a=localhost:9090", "-i=10", "-f=/tmp/metrics.json", "-r=false"},
 			want: ServerConfig{
-				Address: "localhost:9090",
+				Address:         "localhost:9090",
+				StoreInterval:   10 * time.Second,
+				FileStoragePath: "/tmp/metrics.json",
+				Restore:         false,
 			},
 		},
 		{
 			name: "env overrides flag",
-			args: []string{"-a=localhost:9090"},
+			args: []string{"-a=localhost:9090", "-i=10", "-f=/tmp/metrics.json", "-r=false"},
 			env: map[string]string{
-				"ADDRESS": "localhost:9191",
+				"ADDRESS":           "localhost:9191",
+				"STORE_INTERVAL":    "5",
+				"FILE_STORAGE_PATH": "/var/tmp/metrics.json",
+				"RESTORE":           "true",
 			},
 			want: ServerConfig{
-				Address: "localhost:9191",
+				Address:         "localhost:9191",
+				StoreInterval:   5 * time.Second,
+				FileStoragePath: "/var/tmp/metrics.json",
+				Restore:         true,
 			},
+		},
+		{
+			name:    "negative store interval",
+			args:    []string{"-i=-1"},
+			wantErr: true,
+		},
+		{
+			name: "invalid restore env",
+			env: map[string]string{
+				"RESTORE": "nope",
+			},
+			wantErr: true,
 		},
 		{
 			name:    "unknown flag",
