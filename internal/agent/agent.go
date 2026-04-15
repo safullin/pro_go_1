@@ -1,13 +1,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"runtime"
-	"strconv"
 	"time"
 
 	"github.com/safullin/pro_go_1/internal/model"
@@ -115,21 +115,34 @@ func (a *Agent) refreshMetrics() {
 
 func (a *Agent) reportMetrics(ctx context.Context) {
 	for name, value := range a.gauges {
-		_ = a.sendMetric(ctx, model.Gauge, name, strconv.FormatFloat(value, 'f', -1, 64))
+		value := value
+		_ = a.sendMetric(ctx, model.Metrics{
+			ID:    name,
+			MType: model.Gauge,
+			Value: &value,
+		})
 	}
 	for name, value := range a.counters {
-		_ = a.sendMetric(ctx, model.Counter, name, strconv.FormatInt(value, 10))
+		value := value
+		_ = a.sendMetric(ctx, model.Metrics{
+			ID:    name,
+			MType: model.Counter,
+			Delta: &value,
+		})
 	}
 }
 
-func (a *Agent) sendMetric(ctx context.Context, metricType, metricName, metricValue string) error {
-	requestURL := a.address + "/update/" + metricType + "/" + url.PathEscape(metricName) + "/" + url.PathEscape(metricValue)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, nil)
+func (a *Agent) sendMetric(ctx context.Context, metric model.Metrics) error {
+	body, err := json.Marshal(metric)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "text/plain")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.address+"/update/", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.client.Do(req)
 	if err != nil {

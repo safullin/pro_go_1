@@ -1,11 +1,13 @@
 package handler_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/safullin/pro_go_1/internal/model"
 	"github.com/safullin/pro_go_1/internal/repository"
 	"github.com/safullin/pro_go_1/internal/server"
 )
@@ -74,6 +76,131 @@ func TestGetMetricValue(t *testing.T) {
 	}
 }
 
+func TestUpdateMetricJSON(t *testing.T) {
+	storage := repository.NewMemStorage()
+	srv := server.NewServer(storage)
+
+	tests := []struct {
+		name            string
+		body            string
+		wantStatus      int
+		wantContentType string
+	}{
+		{
+			name:            "gauge ok",
+			body:            `{"id":"Alloc","type":"gauge","value":100.5}`,
+			wantStatus:      http.StatusOK,
+			wantContentType: "application/json",
+		},
+		{
+			name:       "missing id",
+			body:       `{"type":"gauge","value":100.5}`,
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "unknown type",
+			body:       `{"id":"Alloc","type":"unknown","value":100.5}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "invalid json",
+			body:       `{"id":"Alloc"`,
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/update/", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			res := httptest.NewRecorder()
+
+			srv.ServeHTTP(res, req)
+
+			if res.Code != tt.wantStatus {
+				t.Fatalf("unexpected status code: got %d want %d", res.Code, tt.wantStatus)
+			}
+			if tt.wantContentType != "" && !strings.Contains(res.Header().Get("Content-Type"), tt.wantContentType) {
+				t.Fatalf("unexpected content type: got %q want %q", res.Header().Get("Content-Type"), tt.wantContentType)
+			}
+		})
+	}
+}
+
+func TestGetMetricValueJSON(t *testing.T) {
+	storage := repository.NewMemStorage()
+	storage.UpdateGauge("Alloc", 123.456)
+	storage.AddCounter("PollCount", 7)
+	srv := server.NewServer(storage)
+
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantType   string
+		wantGauge  *float64
+		wantCount  *int64
+	}{
+		{
+			name:       "gauge",
+			body:       `{"id":"Alloc","type":"gauge"}`,
+			wantStatus: http.StatusOK,
+			wantType:   model.Gauge,
+			wantGauge:  float64Ptr(123.456),
+		},
+		{
+			name:       "counter",
+			body:       `{"id":"PollCount","type":"counter"}`,
+			wantStatus: http.StatusOK,
+			wantType:   model.Counter,
+			wantCount:  int64Ptr(7),
+		},
+		{
+			name:       "unknown metric",
+			body:       `{"id":"Missing","type":"gauge"}`,
+			wantStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/value/", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			res := httptest.NewRecorder()
+
+			srv.ServeHTTP(res, req)
+
+			if res.Code != tt.wantStatus {
+				t.Fatalf("unexpected status code: got %d want %d", res.Code, tt.wantStatus)
+			}
+			if tt.wantStatus != http.StatusOK {
+				return
+			}
+			if got := res.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+				t.Fatalf("unexpected content type: got %q", got)
+			}
+
+			var metric model.Metrics
+			if err := json.NewDecoder(res.Body).Decode(&metric); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if metric.ID == "" || metric.MType != tt.wantType {
+				t.Fatalf("unexpected metric payload: %#v", metric)
+			}
+			if tt.wantGauge != nil {
+				if metric.Value == nil || *metric.Value != *tt.wantGauge {
+					t.Fatalf("unexpected gauge value: got %#v want %v", metric.Value, *tt.wantGauge)
+				}
+			}
+			if tt.wantCount != nil {
+				if metric.Delta == nil || *metric.Delta != *tt.wantCount {
+					t.Fatalf("unexpected counter value: got %#v want %v", metric.Delta, *tt.wantCount)
+				}
+			}
+		})
+	}
+}
+
 func TestListMetrics(t *testing.T) {
 	storage := repository.NewMemStorage()
 	storage.UpdateGauge("Alloc", 42)
@@ -96,4 +223,12 @@ func TestListMetrics(t *testing.T) {
 	if !strings.Contains(body, "PollCount: 3") {
 		t.Fatalf("response body does not contain counter metric: %q", body)
 	}
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
 }
