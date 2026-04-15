@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,8 +28,14 @@ type AgentConfig struct {
 	PollInterval   time.Duration
 }
 
+type envLookup func(string) (string, bool)
+
 // ParseServerConfig парсит флаги сервера.
 func ParseServerConfig(args []string) (ServerConfig, error) {
+	return parseServerConfig(args, os.LookupEnv)
+}
+
+func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	cfg := ServerConfig{
 		Address: DefaultAddress,
 	}
@@ -39,12 +47,19 @@ func ParseServerConfig(args []string) (ServerConfig, error) {
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
 	}
+	if value, ok := lookup("ADDRESS"); ok && value != "" {
+		cfg.Address = value
+	}
 
 	return cfg, nil
 }
 
 // ParseAgentConfig парсит флаги агента.
 func ParseAgentConfig(args []string) (AgentConfig, error) {
+	return parseAgentConfig(args, os.LookupEnv)
+}
+
+func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 	reportIntervalSeconds := int(DefaultReportInterval / time.Second)
 	pollIntervalSeconds := int(DefaultPollInterval / time.Second)
 
@@ -68,6 +83,29 @@ func ParseAgentConfig(args []string) (AgentConfig, error) {
 	}
 	if pollIntervalSeconds <= 0 {
 		return AgentConfig{}, fmt.Errorf("poll interval must be positive")
+	}
+	if value, ok := lookup("ADDRESS"); ok && value != "" {
+		cfg.Address = value
+	}
+	if value, ok := lookup("REPORT_INTERVAL"); ok && value != "" {
+		seconds, err := strconv.Atoi(value)
+		if err != nil {
+			return AgentConfig{}, fmt.Errorf("invalid report interval: %w", err)
+		}
+		if seconds <= 0 {
+			return AgentConfig{}, fmt.Errorf("report interval must be positive")
+		}
+		reportIntervalSeconds = seconds
+	}
+	if value, ok := lookup("POLL_INTERVAL"); ok && value != "" {
+		seconds, err := strconv.Atoi(value)
+		if err != nil {
+			return AgentConfig{}, fmt.Errorf("invalid poll interval: %w", err)
+		}
+		if seconds <= 0 {
+			return AgentConfig{}, fmt.Errorf("poll interval must be positive")
+		}
+		pollIntervalSeconds = seconds
 	}
 
 	cfg.Address = normalizeHTTPAddress(cfg.Address)
