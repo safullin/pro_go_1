@@ -5,8 +5,16 @@ import (
 	"time"
 )
 
+func envMap(values map[string]string) envLookup {
+	return func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
+	}
+}
+
 func TestParseServerConfig(t *testing.T) {
 	tests := []struct {
+		env     map[string]string
 		name    string
 		args    []string
 		want    ServerConfig
@@ -27,6 +35,16 @@ func TestParseServerConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "env overrides flag",
+			args: []string{"-a=localhost:9090"},
+			env: map[string]string{
+				"ADDRESS": "localhost:9191",
+			},
+			want: ServerConfig{
+				Address: "localhost:9191",
+			},
+		},
+		{
 			name:    "unknown flag",
 			args:    []string{"-x=1"},
 			wantErr: true,
@@ -35,7 +53,7 @@ func TestParseServerConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseServerConfig(tt.args)
+			got, err := parseServerConfig(tt.args, envMap(tt.env))
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -54,6 +72,7 @@ func TestParseServerConfig(t *testing.T) {
 
 func TestParseAgentConfig(t *testing.T) {
 	tests := []struct {
+		env     map[string]string
 		name    string
 		args    []string
 		want    AgentConfig
@@ -78,6 +97,20 @@ func TestParseAgentConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "env overrides flags",
+			args: []string{"-a=localhost:9090", "-r=3", "-p=1"},
+			env: map[string]string{
+				"ADDRESS":         "localhost:9191",
+				"REPORT_INTERVAL": "5",
+				"POLL_INTERVAL":   "4",
+			},
+			want: AgentConfig{
+				Address:        "http://localhost:9191",
+				ReportInterval: 5 * time.Second,
+				PollInterval:   4 * time.Second,
+			},
+		},
+		{
 			name: "keeps scheme and trims slash",
 			args: []string{"-a=http://localhost:9090/"},
 			want: AgentConfig{
@@ -97,6 +130,20 @@ func TestParseAgentConfig(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "zero report interval from env",
+			env: map[string]string{
+				"REPORT_INTERVAL": "0",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid poll interval from env",
+			env: map[string]string{
+				"POLL_INTERVAL": "abc",
+			},
+			wantErr: true,
+		},
+		{
 			name:    "unknown flag",
 			args:    []string{"-x=1"},
 			wantErr: true,
@@ -105,7 +152,7 @@ func TestParseAgentConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseAgentConfig(tt.args)
+			got, err := parseAgentConfig(tt.args, envMap(tt.env))
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
