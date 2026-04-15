@@ -11,14 +11,20 @@ import (
 )
 
 const (
-	DefaultAddress        = "localhost:8080"
-	DefaultReportInterval = 10 * time.Second
-	DefaultPollInterval   = 2 * time.Second
+	DefaultAddress         = "localhost:8080"
+	DefaultReportInterval  = 10 * time.Second
+	DefaultPollInterval    = 2 * time.Second
+	DefaultStoreInterval   = 300 * time.Second
+	DefaultFileStoragePath = "metrics-db.json"
+	DefaultRestore         = true
 )
 
 // ServerConfig хранит параметры запуска HTTP-сервера.
 type ServerConfig struct {
-	Address string
+	Address         string
+	StoreInterval   time.Duration
+	FileStoragePath string
+	Restore         bool
 }
 
 // AgentConfig хранит параметры запуска агента.
@@ -36,20 +42,53 @@ func ParseServerConfig(args []string) (ServerConfig, error) {
 }
 
 func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
+	storeIntervalSeconds := int(DefaultStoreInterval / time.Second)
+
 	cfg := ServerConfig{
-		Address: DefaultAddress,
+		Address:         DefaultAddress,
+		StoreInterval:   DefaultStoreInterval,
+		FileStoragePath: DefaultFileStoragePath,
+		Restore:         DefaultRestore,
 	}
 
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&cfg.Address, "a", cfg.Address, "HTTP server address")
+	fs.IntVar(&storeIntervalSeconds, "i", storeIntervalSeconds, "store interval in seconds")
+	fs.StringVar(&cfg.FileStoragePath, "f", cfg.FileStoragePath, "path to metrics storage file")
+	fs.BoolVar(&cfg.Restore, "r", cfg.Restore, "restore metrics from file on startup")
 
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
 	}
+	if storeIntervalSeconds < 0 {
+		return ServerConfig{}, fmt.Errorf("store interval must be non-negative")
+	}
 	if value, ok := lookup("ADDRESS"); ok && value != "" {
 		cfg.Address = value
 	}
+	if value, ok := lookup("STORE_INTERVAL"); ok && value != "" {
+		seconds, err := strconv.Atoi(value)
+		if err != nil {
+			return ServerConfig{}, fmt.Errorf("invalid store interval: %w", err)
+		}
+		if seconds < 0 {
+			return ServerConfig{}, fmt.Errorf("store interval must be non-negative")
+		}
+		storeIntervalSeconds = seconds
+	}
+	if value, ok := lookup("FILE_STORAGE_PATH"); ok && value != "" {
+		cfg.FileStoragePath = value
+	}
+	if value, ok := lookup("RESTORE"); ok && value != "" {
+		restore, err := strconv.ParseBool(value)
+		if err != nil {
+			return ServerConfig{}, fmt.Errorf("invalid restore flag: %w", err)
+		}
+		cfg.Restore = restore
+	}
+
+	cfg.StoreInterval = time.Duration(storeIntervalSeconds) * time.Second
 
 	return cfg, nil
 }
