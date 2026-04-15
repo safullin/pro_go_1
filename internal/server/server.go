@@ -6,6 +6,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/safullin/pro_go_1/internal/handler"
+	"github.com/safullin/pro_go_1/internal/logger"
+	"github.com/safullin/pro_go_1/internal/middleware"
 	"github.com/safullin/pro_go_1/internal/repository"
 )
 
@@ -13,6 +15,7 @@ import (
 func NewServer(storage repository.MetricsRepository) http.Handler {
 	router := chi.NewRouter()
 	metricsHandler := handler.NewMetricsHandler(storage)
+	router.Use(middleware.RequestLogger(logger.New()))
 	router.Post("/update/{type}/{name}/{value}", metricsHandler.UpdateMetric)
 	router.Get("/value/{type}/{name}", metricsHandler.GetMetricValue)
 	router.Get("/", metricsHandler.ListMetrics)
