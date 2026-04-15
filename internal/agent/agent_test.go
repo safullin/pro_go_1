@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -61,9 +62,18 @@ func TestReportMetrics(t *testing.T) {
 		if got := r.Header.Get("Content-Type"); got != "application/json" {
 			t.Fatalf("unexpected content type: got %q want %q", got, "application/json")
 		}
+		if got := r.Header.Get("Content-Encoding"); got != "gzip" {
+			t.Fatalf("unexpected content encoding: got %q want %q", got, "gzip")
+		}
+
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Fatalf("gzip reader: %v", err)
+		}
+		defer zr.Close()
 
 		var metric model.Metrics
-		if err := json.NewDecoder(r.Body).Decode(&metric); err != nil {
+		if err := json.NewDecoder(zr).Decode(&metric); err != nil {
 			t.Fatalf("decode request body: %v", err)
 		}
 		metrics = append(metrics, metric)

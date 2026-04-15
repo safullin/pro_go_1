@@ -15,6 +15,7 @@ import (
 func NewServer(storage repository.MetricsRepository) http.Handler {
 	router := chi.NewRouter()
 	metricsHandler := handler.NewMetricsHandler(storage)
+	router.Use(middleware.Gzip)
 	router.Use(middleware.RequestLogger(logger.New()))
 	router.Post("/update", metricsHandler.UpdateMetricJSON)
 	router.Post("/update/", metricsHandler.UpdateMetricJSON)
