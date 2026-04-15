@@ -2,10 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
-	"sort"
 	"testing"
 	"time"
 
@@ -53,12 +53,21 @@ func TestRefreshMetrics(t *testing.T) {
 }
 
 func TestReportMetrics(t *testing.T) {
-	var paths []string
+	var metrics []model.Metrics
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.URL.Path)
-		if got := r.Header.Get("Content-Type"); got != "text/plain" {
-			t.Fatalf("unexpected content type: got %q want %q", got, "text/plain")
+		if r.URL.Path != "/update/" {
+			t.Fatalf("unexpected request path: got %q want %q", r.URL.Path, "/update/")
 		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("unexpected content type: got %q want %q", got, "application/json")
+		}
+
+		var metric model.Metrics
+		if err := json.NewDecoder(r.Body).Decode(&metric); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		metrics = append(metrics, metric)
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -69,19 +78,30 @@ func TestReportMetrics(t *testing.T) {
 
 	metricsAgent.reportMetrics(context.Background())
 
-	sort.Strings(paths)
-	want := []string{
-		"/update/counter/PollCount/4",
-		"/update/gauge/Alloc/100.5",
+	if len(metrics) != 2 {
+		t.Fatalf("unexpected requests count: got %d want %d", len(metrics), 2)
 	}
 
-	if len(paths) != len(want) {
-		t.Fatalf("unexpected requests count: got %d want %d", len(paths), len(want))
-	}
-
-	for i := range want {
-		if paths[i] != want[i] {
-			t.Fatalf("unexpected request path: got %q want %q", paths[i], want[i])
+	gotGauge := false
+	gotCounter := false
+	for _, metric := range metrics {
+		switch metric.ID {
+		case "Alloc":
+			if metric.MType != model.Gauge || metric.Value == nil || *metric.Value != 100.5 {
+				t.Fatalf("unexpected gauge payload: %#v", metric)
+			}
+			gotGauge = true
+		case "PollCount":
+			if metric.MType != model.Counter || metric.Delta == nil || *metric.Delta != 4 {
+				t.Fatalf("unexpected counter payload: %#v", metric)
+			}
+			gotCounter = true
+		default:
+			t.Fatalf("unexpected metric payload: %#v", metric)
 		}
+	}
+
+	if !gotGauge || !gotCounter {
+		t.Fatalf("missing reported metrics: gauge=%v counter=%v", gotGauge, gotCounter)
 	}
 }

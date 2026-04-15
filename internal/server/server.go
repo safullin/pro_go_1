@@ -16,7 +16,11 @@ func NewServer(storage repository.MetricsRepository) http.Handler {
 	router := chi.NewRouter()
 	metricsHandler := handler.NewMetricsHandler(storage)
 	router.Use(middleware.RequestLogger(logger.New()))
+	router.Post("/update", metricsHandler.UpdateMetricJSON)
+	router.Post("/update/", metricsHandler.UpdateMetricJSON)
 	router.Post("/update/{type}/{name}/{value}", metricsHandler.UpdateMetric)
+	router.Post("/value", metricsHandler.GetMetricValueJSON)
+	router.Post("/value/", metricsHandler.GetMetricValueJSON)
 	router.Get("/value/{type}/{name}", metricsHandler.GetMetricValue)
 	router.Get("/", metricsHandler.ListMetrics)
 	return router
