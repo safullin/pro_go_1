@@ -12,11 +12,19 @@ import (
 )
 
 // NewServer собирает HTTP-сервер приложения на chi.
-func NewServer(storage repository.MetricsRepository) http.Handler {
+func NewServer(storage repository.MetricsRepository, pingers ...handler.Pinger) http.Handler {
 	router := chi.NewRouter()
 	metricsHandler := handler.NewMetricsHandler(storage)
+	var pinger handler.Pinger
+	if len(pingers) > 0 {
+		pinger = pingers[0]
+	}
+
 	router.Use(middleware.Gzip)
 	router.Use(middleware.RequestLogger(logger.New()))
+	router.Get("/ping", handler.NewPingHandler(pinger).Ping)
+	router.Post("/updates", metricsHandler.UpdateMetricsJSON)
+	router.Post("/updates/", metricsHandler.UpdateMetricsJSON)
 	router.Post("/update", metricsHandler.UpdateMetricJSON)
 	router.Post("/update/", metricsHandler.UpdateMetricJSON)
 	router.Post("/update/{type}/{name}/{value}", metricsHandler.UpdateMetric)

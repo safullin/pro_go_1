@@ -37,14 +37,20 @@ func (h *MetricsHandler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid gauge value", http.StatusBadRequest)
 			return
 		}
-		h.storage.UpdateGauge(metricName, value)
+		if err := h.storage.UpdateGauge(metricName, value); err != nil {
+			http.Error(w, "failed to update metric", http.StatusInternalServerError)
+			return
+		}
 	case model.Counter:
 		value, err := strconv.ParseInt(rawValue, 10, 64)
 		if err != nil {
 			http.Error(w, "invalid counter value", http.StatusBadRequest)
 			return
 		}
-		h.storage.AddCounter(metricName, value)
+		if err := h.storage.AddCounter(metricName, value); err != nil {
+			http.Error(w, "failed to update metric", http.StatusInternalServerError)
+			return
+		}
 	default:
 		http.Error(w, "unknown metric type", http.StatusBadRequest)
 		return
@@ -72,14 +78,20 @@ func (h *MetricsHandler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request
 			http.Error(w, "gauge value is required", http.StatusBadRequest)
 			return
 		}
-		h.storage.UpdateGauge(metric.ID, *metric.Value)
+		if err := h.storage.UpdateGauge(metric.ID, *metric.Value); err != nil {
+			http.Error(w, "failed to update metric", http.StatusInternalServerError)
+			return
+		}
 		metric.Delta = nil
 	case model.Counter:
 		if metric.Delta == nil {
 			http.Error(w, "counter delta is required", http.StatusBadRequest)
 			return
 		}
-		h.storage.AddCounter(metric.ID, *metric.Delta)
+		if err := h.storage.AddCounter(metric.ID, *metric.Delta); err != nil {
+			http.Error(w, "failed to update metric", http.StatusInternalServerError)
+			return
+		}
 		value, _ := h.storage.GetCounter(metric.ID)
 		metric.Value = nil
 		metric.Delta = int64Ptr(value)
@@ -89,6 +101,30 @@ func (h *MetricsHandler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, metric)
+}
+
+// UpdateMetricsJSON обрабатывает POST /updates/.
+func (h *MetricsHandler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
+	metrics, err := decodeMetrics(r)
+	if err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	for i := range metrics {
+		if err := validateMetric(&metrics[i]); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	updated, err := h.storage.UpdateMetrics(r.Context(), metrics)
+	if err != nil {
+		http.Error(w, "failed to update metrics", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSONMetrics(w, http.StatusOK, updated)
 }
 
 // GetMetricValue возвращает текущее значение метрики в text/plain.
@@ -194,10 +230,52 @@ func decodeMetric(r *http.Request) (model.Metrics, error) {
 	return metric, nil
 }
 
+func decodeMetrics(r *http.Request) ([]model.Metrics, error) {
+	defer r.Body.Close()
+
+	var metrics []model.Metrics
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&metrics); err != nil {
+		return nil, err
+	}
+
+	return metrics, nil
+}
+
+func validateMetric(metric *model.Metrics) error {
+	if metric.ID == "" {
+		return errMetricIDRequired{}
+	}
+
+	switch metric.MType {
+	case model.Gauge:
+		if metric.Value == nil {
+			return errGaugeValueRequired{}
+		}
+		metric.Delta = nil
+	case model.Counter:
+		if metric.Delta == nil {
+			return errCounterDeltaRequired{}
+		}
+		metric.Value = nil
+	default:
+		return errUnknownMetricType{}
+	}
+
+	return nil
+}
+
 func writeJSON(w http.ResponseWriter, statusCode int, metric model.Metrics) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(metric)
+}
+
+func writeJSONMetrics(w http.ResponseWriter, statusCode int, metrics []model.Metrics) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(metrics)
 }
 
 func float64Ptr(value float64) *float64 {
@@ -206,4 +284,28 @@ func float64Ptr(value float64) *float64 {
 
 func int64Ptr(value int64) *int64 {
 	return &value
+}
+
+type errMetricIDRequired struct{}
+
+func (errMetricIDRequired) Error() string {
+	return "metric id is required"
+}
+
+type errGaugeValueRequired struct{}
+
+func (errGaugeValueRequired) Error() string {
+	return "gauge value is required"
+}
+
+type errCounterDeltaRequired struct{}
+
+func (errCounterDeltaRequired) Error() string {
+	return "counter delta is required"
+}
+
+type errUnknownMetricType struct{}
+
+func (errUnknownMetricType) Error() string {
+	return "unknown metric type"
 }

@@ -32,11 +32,13 @@ func TestParseServerConfig(t *testing.T) {
 		},
 		{
 			name: "custom address",
-			args: []string{"-a=localhost:9090", "-i=10", "-f=/tmp/metrics.json", "-r=false"},
+			args: []string{"-a=localhost:9090", "-i=10", "-f=/tmp/metrics.json", "-d=postgres://user:pass@localhost/db", "-r=false"},
 			want: ServerConfig{
 				Address:         "localhost:9090",
 				StoreInterval:   10 * time.Second,
 				FileStoragePath: "/tmp/metrics.json",
+				DatabaseDSN:     "postgres://user:pass@localhost/db",
+				FileStorage:     true,
 				Restore:         false,
 			},
 		},
@@ -47,13 +49,26 @@ func TestParseServerConfig(t *testing.T) {
 				"ADDRESS":           "localhost:9191",
 				"STORE_INTERVAL":    "5",
 				"FILE_STORAGE_PATH": "/var/tmp/metrics.json",
+				"DATABASE_DSN":      "postgres://postgres:postgres@localhost/praktikum",
 				"RESTORE":           "true",
 			},
 			want: ServerConfig{
 				Address:         "localhost:9191",
 				StoreInterval:   5 * time.Second,
 				FileStoragePath: "/var/tmp/metrics.json",
+				DatabaseDSN:     "postgres://postgres:postgres@localhost/praktikum",
+				FileStorage:     true,
 				Restore:         true,
+			},
+		},
+		{
+			name: "empty file flag does not enable file storage",
+			args: []string{"-f="},
+			want: ServerConfig{
+				Address:         DefaultAddress,
+				StoreInterval:   DefaultStoreInterval,
+				FileStoragePath: "",
+				Restore:         DefaultRestore,
 			},
 		},
 		{

@@ -26,19 +26,37 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	storage := repository.NewPersistentStorage(cfg.FileStoragePath, cfg.StoreInterval == 0)
-	if cfg.Restore {
-		if err := storage.RestoreFromFile(); err != nil {
+	var (
+		handler http.Handler
+	)
+
+	if cfg.DatabaseDSN != "" {
+		storage, err := repository.NewPostgresStorage(ctx, cfg.DatabaseDSN)
+		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-	}
+		defer storage.Close()
 
-	go storage.RunPersistencePeriodically(ctx, cfg.StoreInterval)
+		handler = server.NewServer(storage, storage)
+	} else if cfg.FileStorage {
+		storage := repository.NewPersistentStorage(cfg.FileStoragePath, cfg.StoreInterval == 0)
+		if cfg.Restore {
+			if err := storage.RestoreFromFile(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+
+		go storage.RunPersistencePeriodically(ctx, cfg.StoreInterval)
+		handler = server.NewServer(storage)
+	} else {
+		handler = server.NewServer(repository.NewMemStorage())
+	}
 
 	srv := &http.Server{
 		Addr:    cfg.Address,
-		Handler: server.NewServer(storage),
+		Handler: handler,
 	}
 
 	go func() {

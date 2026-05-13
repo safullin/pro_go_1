@@ -24,6 +24,8 @@ type ServerConfig struct {
 	Address         string
 	StoreInterval   time.Duration
 	FileStoragePath string
+	DatabaseDSN     string
+	FileStorage     bool
 	Restore         bool
 }
 
@@ -56,11 +58,17 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	fs.StringVar(&cfg.Address, "a", cfg.Address, "HTTP server address")
 	fs.IntVar(&storeIntervalSeconds, "i", storeIntervalSeconds, "store interval in seconds")
 	fs.StringVar(&cfg.FileStoragePath, "f", cfg.FileStoragePath, "path to metrics storage file")
+	fs.StringVar(&cfg.DatabaseDSN, "d", cfg.DatabaseDSN, "database connection string")
 	fs.BoolVar(&cfg.Restore, "r", cfg.Restore, "restore metrics from file on startup")
 
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
 	}
+	fs.Visit(func(flag *flag.Flag) {
+		if flag.Name == "f" && cfg.FileStoragePath != "" {
+			cfg.FileStorage = true
+		}
+	})
 	if storeIntervalSeconds < 0 {
 		return ServerConfig{}, fmt.Errorf("store interval must be non-negative")
 	}
@@ -79,6 +87,10 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	}
 	if value, ok := lookup("FILE_STORAGE_PATH"); ok && value != "" {
 		cfg.FileStoragePath = value
+		cfg.FileStorage = true
+	}
+	if value, ok := lookup("DATABASE_DSN"); ok && value != "" {
+		cfg.DatabaseDSN = value
 	}
 	if value, ok := lookup("RESTORE"); ok && value != "" {
 		restore, err := strconv.ParseBool(value)

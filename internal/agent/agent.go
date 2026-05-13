@@ -5,6 +5,8 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
@@ -35,6 +37,7 @@ type Agent struct {
 	address        string
 	pollInterval   time.Duration
 	reportInterval time.Duration
+	retryDelays    []time.Duration
 	client         HTTPDoer
 	reader         RuntimeReader
 	randomValue    func() float64
@@ -48,6 +51,7 @@ func New(address string, pollInterval, reportInterval time.Duration) *Agent {
 		address:        address,
 		pollInterval:   pollInterval,
 		reportInterval: reportInterval,
+		retryDelays:    []time.Duration{time.Second, 3 * time.Second, 5 * time.Second},
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -115,26 +119,40 @@ func (a *Agent) refreshMetrics() {
 }
 
 func (a *Agent) reportMetrics(ctx context.Context) {
+	metrics := make([]model.Metrics, 0, len(a.gauges)+len(a.counters))
 	for name, value := range a.gauges {
 		value := value
-		_ = a.sendMetric(ctx, model.Metrics{
+		metrics = append(metrics, model.Metrics{
 			ID:    name,
 			MType: model.Gauge,
 			Value: &value,
 		})
 	}
 	for name, value := range a.counters {
+		if value == 0 {
+			continue
+		}
 		value := value
-		_ = a.sendMetric(ctx, model.Metrics{
+		metrics = append(metrics, model.Metrics{
 			ID:    name,
 			MType: model.Counter,
 			Delta: &value,
 		})
 	}
+
+	if len(metrics) == 0 {
+		return
+	}
+	if err := a.sendMetrics(ctx, metrics); err != nil {
+		return
+	}
+	for name := range a.counters {
+		a.counters[name] = 0
+	}
 }
 
-func (a *Agent) sendMetric(ctx context.Context, metric model.Metrics) error {
-	body, err := json.Marshal(metric)
+func (a *Agent) sendMetrics(ctx context.Context, metrics []model.Metrics) error {
+	body, err := json.Marshal(metrics)
 	if err != nil {
 		return err
 	}
@@ -143,21 +161,74 @@ func (a *Agent) sendMetric(ctx context.Context, metric model.Metrics) error {
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.address+"/update/", bytes.NewReader(compressedBody))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
+	return a.doWithRetry(ctx, func() error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.address+"/updates/", bytes.NewReader(compressedBody))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Encoding", "gzip")
 
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+		resp, err := a.client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
 
-	_, _ = io.Copy(io.Discard, resp.Body)
-	return nil
+		_, _ = io.Copy(io.Discard, resp.Body)
+		if resp.StatusCode >= http.StatusBadRequest {
+			return serverStatusError{status: resp.Status}
+		}
+		return nil
+	})
+}
+
+func (a *Agent) doWithRetry(ctx context.Context, operation func() error) error {
+	err := operation()
+	for _, delay := range a.retryDelays {
+		if err == nil || !isRetriableAgentError(err) {
+			return err
+		}
+		if err := sleepWithContext(ctx, delay); err != nil {
+			return err
+		}
+		err = operation()
+	}
+	return err
+}
+
+func isRetriableAgentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var statusErr serverStatusError
+	if errors.As(err, &statusErr) {
+		return false
+	}
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+type serverStatusError struct {
+	status string
+}
+
+func (e serverStatusError) Error() string {
+	return fmt.Sprintf("server returned %s", e.status)
 }
 
 func gzipData(data []byte) ([]byte, error) {

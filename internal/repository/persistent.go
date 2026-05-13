@@ -28,19 +28,44 @@ func NewPersistentStorage(filePath string, syncWrites bool) *PersistentStorage {
 }
 
 // UpdateGauge обновляет gauge и при необходимости синхронно сохраняет состояние.
-func (s *PersistentStorage) UpdateGauge(name string, value float64) {
-	s.MemStorage.UpdateGauge(name, value)
-	if s.syncWrites {
-		_ = s.Save()
+func (s *PersistentStorage) UpdateGauge(name string, value float64) error {
+	if err := s.MemStorage.UpdateGauge(name, value); err != nil {
+		return err
 	}
+	if s.syncWrites {
+		if err := s.Save(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // AddCounter обновляет counter и при необходимости синхронно сохраняет состояние.
-func (s *PersistentStorage) AddCounter(name string, delta int64) {
-	s.MemStorage.AddCounter(name, delta)
-	if s.syncWrites {
-		_ = s.Save()
+func (s *PersistentStorage) AddCounter(name string, delta int64) error {
+	if err := s.MemStorage.AddCounter(name, delta); err != nil {
+		return err
 	}
+	if s.syncWrites {
+		if err := s.Save(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// UpdateMetrics обновляет несколько метрик и синхронно сохраняет состояние при необходимости.
+func (s *PersistentStorage) UpdateMetrics(ctx context.Context, metrics []model.Metrics) ([]model.Metrics, error) {
+	updated, err := s.MemStorage.UpdateMetrics(ctx, metrics)
+	if err != nil {
+		return nil, err
+	}
+	if s.syncWrites {
+		if err := s.Save(); err != nil {
+			return nil, err
+		}
+	}
+
+	return updated, nil
 }
 
 // Save сохраняет текущие метрики в файл.

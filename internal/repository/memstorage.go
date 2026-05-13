@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"sort"
 	"strconv"
 	"sync"
@@ -10,8 +11,9 @@ import (
 
 // MetricsRepository описывает операции обновления метрик.
 type MetricsRepository interface {
-	UpdateGauge(name string, value float64)
-	AddCounter(name string, delta int64)
+	UpdateGauge(name string, value float64) error
+	AddCounter(name string, delta int64) error
+	UpdateMetrics(ctx context.Context, metrics []model.Metrics) ([]model.Metrics, error)
 	GetGauge(name string) (float64, bool)
 	GetCounter(name string) (int64, bool)
 	List() []model.StoredMetric
@@ -33,19 +35,57 @@ func NewMemStorage() *MemStorage {
 }
 
 // UpdateGauge заменяет значение метрики типа gauge.
-func (s *MemStorage) UpdateGauge(name string, value float64) {
+func (s *MemStorage) UpdateGauge(name string, value float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.gauges[name] = value
+	return nil
 }
 
 // AddCounter добавляет delta к метрике типа counter.
-func (s *MemStorage) AddCounter(name string, delta int64) {
+func (s *MemStorage) AddCounter(name string, delta int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.counters[name] += delta
+	return nil
+}
+
+// UpdateMetrics обновляет несколько метрик одним критическим участком.
+func (s *MemStorage) UpdateMetrics(_ context.Context, metrics []model.Metrics) ([]model.Metrics, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	updated := make([]model.Metrics, 0, len(metrics))
+	for _, metric := range metrics {
+		switch metric.MType {
+		case model.Gauge:
+			if metric.Value == nil {
+				continue
+			}
+			value := *metric.Value
+			s.gauges[metric.ID] = value
+			updated = append(updated, model.Metrics{
+				ID:    metric.ID,
+				MType: model.Gauge,
+				Value: &value,
+			})
+		case model.Counter:
+			if metric.Delta == nil {
+				continue
+			}
+			s.counters[metric.ID] += *metric.Delta
+			value := s.counters[metric.ID]
+			updated = append(updated, model.Metrics{
+				ID:    metric.ID,
+				MType: model.Counter,
+				Delta: &value,
+			})
+		}
+	}
+
+	return updated, nil
 }
 
 // GetGauge возвращает значение gauge по имени.

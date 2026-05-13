@@ -127,6 +127,61 @@ func TestUpdateMetricJSON(t *testing.T) {
 	}
 }
 
+func TestUpdateMetricsJSON(t *testing.T) {
+	storage := repository.NewMemStorage()
+	srv := server.NewServer(storage)
+
+	body := `[
+		{"id":"Alloc","type":"gauge","value":100.5},
+		{"id":"PollCount","type":"counter","delta":4},
+		{"id":"PollCount","type":"counter","delta":3}
+	]`
+	req := httptest.NewRequest(http.MethodPost, "/updates/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+
+	srv.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d", res.Code, http.StatusOK)
+	}
+	if got := res.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+		t.Fatalf("unexpected content type: got %q", got)
+	}
+	if got, ok := storage.GetGauge("Alloc"); !ok || got != 100.5 {
+		t.Fatalf("unexpected gauge value: got %v ok=%v", got, ok)
+	}
+	if got, ok := storage.GetCounter("PollCount"); !ok || got != 7 {
+		t.Fatalf("unexpected counter value: got %v ok=%v", got, ok)
+	}
+
+	var metrics []model.Metrics
+	if err := json.NewDecoder(res.Body).Decode(&metrics); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(metrics) != 3 {
+		t.Fatalf("unexpected response metrics count: got %d want %d", len(metrics), 3)
+	}
+}
+
+func TestUpdateMetricsJSONRejectsInvalidBatch(t *testing.T) {
+	storage := repository.NewMemStorage()
+	srv := server.NewServer(storage)
+
+	req := httptest.NewRequest(http.MethodPost, "/updates/", strings.NewReader(`[{"id":"Alloc","type":"gauge"}]`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+
+	srv.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status code: got %d want %d", res.Code, http.StatusBadRequest)
+	}
+	if _, ok := storage.GetGauge("Alloc"); ok {
+		t.Fatal("invalid batch must not update storage")
+	}
+}
+
 func TestGetMetricValueJSON(t *testing.T) {
 	storage := repository.NewMemStorage()
 	storage.UpdateGauge("Alloc", 123.456)

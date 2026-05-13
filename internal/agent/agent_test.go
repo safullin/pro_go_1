@@ -4,9 +4,12 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +22,38 @@ type stubRuntimeReader struct {
 
 func (s stubRuntimeReader) ReadMemStats(dst *runtime.MemStats) {
 	*dst = s.stats
+}
+
+type retryDoer struct {
+	failures int
+	calls    int
+}
+
+func (d *retryDoer) Do(*http.Request) (*http.Response, error) {
+	d.calls++
+	if d.calls <= d.failures {
+		return nil, errors.New("connection refused")
+	}
+
+	return &http.Response{
+		Status:     http.StatusText(http.StatusOK),
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader("")),
+	}, nil
+}
+
+type statusDoer struct {
+	statusCode int
+	calls      int
+}
+
+func (d *statusDoer) Do(*http.Request) (*http.Response, error) {
+	d.calls++
+	return &http.Response{
+		Status:     http.StatusText(d.statusCode),
+		StatusCode: d.statusCode,
+		Body:       io.NopCloser(strings.NewReader("")),
+	}, nil
 }
 
 func TestRefreshMetrics(t *testing.T) {
@@ -54,10 +89,12 @@ func TestRefreshMetrics(t *testing.T) {
 }
 
 func TestReportMetrics(t *testing.T) {
+	requests := 0
 	var metrics []model.Metrics
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/update/" {
-			t.Fatalf("unexpected request path: got %q want %q", r.URL.Path, "/update/")
+		requests++
+		if r.URL.Path != "/updates/" {
+			t.Fatalf("unexpected request path: got %q want %q", r.URL.Path, "/updates/")
 		}
 		if got := r.Header.Get("Content-Type"); got != "application/json" {
 			t.Fatalf("unexpected content type: got %q want %q", got, "application/json")
@@ -72,11 +109,9 @@ func TestReportMetrics(t *testing.T) {
 		}
 		defer zr.Close()
 
-		var metric model.Metrics
-		if err := json.NewDecoder(zr).Decode(&metric); err != nil {
+		if err := json.NewDecoder(zr).Decode(&metrics); err != nil {
 			t.Fatalf("decode request body: %v", err)
 		}
-		metrics = append(metrics, metric)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -88,8 +123,11 @@ func TestReportMetrics(t *testing.T) {
 
 	metricsAgent.reportMetrics(context.Background())
 
+	if requests != 1 {
+		t.Fatalf("unexpected requests count: got %d want %d", requests, 1)
+	}
 	if len(metrics) != 2 {
-		t.Fatalf("unexpected requests count: got %d want %d", len(metrics), 2)
+		t.Fatalf("unexpected metrics count: got %d want %d", len(metrics), 2)
 	}
 
 	gotGauge := false
@@ -113,5 +151,69 @@ func TestReportMetrics(t *testing.T) {
 
 	if !gotGauge || !gotCounter {
 		t.Fatalf("missing reported metrics: gauge=%v counter=%v", gotGauge, gotCounter)
+	}
+	if got := metricsAgent.counters["PollCount"]; got != 0 {
+		t.Fatalf("counter was not reset after successful report: got %d", got)
+	}
+}
+
+func TestReportMetricsSkipsEmptyBatch(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	metricsAgent := New(server.URL, time.Second, time.Second)
+
+	metricsAgent.reportMetrics(context.Background())
+
+	if requests != 0 {
+		t.Fatalf("unexpected requests count: got %d want %d", requests, 0)
+	}
+}
+
+func TestSendMetricsRetriesTemporaryTransportErrors(t *testing.T) {
+	client := &retryDoer{failures: 2}
+	metricsAgent := New("http://localhost:8080", time.Second, time.Second)
+	metricsAgent.client = client
+	metricsAgent.retryDelays = []time.Duration{0, 0, 0}
+
+	value := 100.5
+	err := metricsAgent.sendMetrics(context.Background(), []model.Metrics{
+		{
+			ID:    "Alloc",
+			MType: model.Gauge,
+			Value: &value,
+		},
+	})
+	if err != nil {
+		t.Fatalf("send metrics: %v", err)
+	}
+	if client.calls != 3 {
+		t.Fatalf("unexpected attempts count: got %d want %d", client.calls, 3)
+	}
+}
+
+func TestSendMetricsDoesNotRetryStatusErrors(t *testing.T) {
+	client := &statusDoer{statusCode: http.StatusBadRequest}
+	metricsAgent := New("http://localhost:8080", time.Second, time.Second)
+	metricsAgent.client = client
+	metricsAgent.retryDelays = []time.Duration{0, 0, 0}
+
+	value := 100.5
+	err := metricsAgent.sendMetrics(context.Background(), []model.Metrics{
+		{
+			ID:    "Alloc",
+			MType: model.Gauge,
+			Value: &value,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if client.calls != 1 {
+		t.Fatalf("unexpected attempts count: got %d want %d", client.calls, 1)
 	}
 }
