@@ -11,8 +11,8 @@ import (
 
 // MetricsRepository описывает операции обновления метрик.
 type MetricsRepository interface {
-	UpdateGauge(name string, value float64) error
-	AddCounter(name string, delta int64) error
+	UpdateGauge(ctx context.Context, name string, value float64) error
+	AddCounter(ctx context.Context, name string, delta int64) error
 	UpdateMetrics(ctx context.Context, metrics []model.Metrics) ([]model.Metrics, error)
 	GetGauge(name string) (float64, bool)
 	GetCounter(name string) (int64, bool)
@@ -35,7 +35,7 @@ func NewMemStorage() *MemStorage {
 }
 
 // UpdateGauge заменяет значение метрики типа gauge.
-func (s *MemStorage) UpdateGauge(name string, value float64) error {
+func (s *MemStorage) UpdateGauge(_ context.Context, name string, value float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -44,7 +44,7 @@ func (s *MemStorage) UpdateGauge(name string, value float64) error {
 }
 
 // AddCounter добавляет delta к метрике типа counter.
-func (s *MemStorage) AddCounter(name string, delta int64) error {
+func (s *MemStorage) AddCounter(_ context.Context, name string, delta int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

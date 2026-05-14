@@ -11,8 +11,8 @@ func TestPersistentStorageSaveAndRestore(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "metrics.json")
 
 	storage := NewPersistentStorage(filePath, false)
-	storage.UpdateGauge("Alloc", 123.456)
-	storage.AddCounter("PollCount", 7)
+	_ = storage.UpdateGauge(context.Background(), "Alloc", 123.456)
+	_ = storage.AddCounter(context.Background(), "PollCount", 7)
 
 	if err := storage.Save(); err != nil {
 		t.Fatalf("save metrics: %v", err)
@@ -35,7 +35,7 @@ func TestPersistentStorageSyncWrites(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "metrics.json")
 
 	storage := NewPersistentStorage(filePath, true)
-	storage.UpdateGauge("Alloc", 42)
+	_ = storage.UpdateGauge(context.Background(), "Alloc", 42)
 
 	restored := NewPersistentStorage(filePath, false)
 	if err := restored.RestoreFromFile(); err != nil {
@@ -51,7 +51,7 @@ func TestPersistentStoragePeriodicSaveOnShutdown(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "metrics.json")
 
 	storage := NewPersistentStorage(filePath, false)
-	storage.AddCounter("PollCount", 3)
+	_ = storage.AddCounter(context.Background(), "PollCount", 3)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

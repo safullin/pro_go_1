@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"html"
 	"io"
 	"net/http"
@@ -37,7 +38,7 @@ func (h *MetricsHandler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid gauge value", http.StatusBadRequest)
 			return
 		}
-		if err := h.storage.UpdateGauge(metricName, value); err != nil {
+		if err := h.storage.UpdateGauge(r.Context(), metricName, value); err != nil {
 			http.Error(w, "failed to update metric", http.StatusInternalServerError)
 			return
 		}
@@ -47,7 +48,7 @@ func (h *MetricsHandler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid counter value", http.StatusBadRequest)
 			return
 		}
-		if err := h.storage.AddCounter(metricName, value); err != nil {
+		if err := h.storage.AddCounter(r.Context(), metricName, value); err != nil {
 			http.Error(w, "failed to update metric", http.StatusInternalServerError)
 			return
 		}
@@ -78,7 +79,7 @@ func (h *MetricsHandler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request
 			http.Error(w, "gauge value is required", http.StatusBadRequest)
 			return
 		}
-		if err := h.storage.UpdateGauge(metric.ID, *metric.Value); err != nil {
+		if err := h.storage.UpdateGauge(r.Context(), metric.ID, *metric.Value); err != nil {
 			http.Error(w, "failed to update metric", http.StatusInternalServerError)
 			return
 		}
@@ -88,7 +89,7 @@ func (h *MetricsHandler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request
 			http.Error(w, "counter delta is required", http.StatusBadRequest)
 			return
 		}
-		if err := h.storage.AddCounter(metric.ID, *metric.Delta); err != nil {
+		if err := h.storage.AddCounter(r.Context(), metric.ID, *metric.Delta); err != nil {
 			http.Error(w, "failed to update metric", http.StatusInternalServerError)
 			return
 		}
@@ -245,22 +246,22 @@ func decodeMetrics(r *http.Request) ([]model.Metrics, error) {
 
 func validateMetric(metric *model.Metrics) error {
 	if metric.ID == "" {
-		return errMetricIDRequired{}
+		return errMetricIDRequired
 	}
 
 	switch metric.MType {
 	case model.Gauge:
 		if metric.Value == nil {
-			return errGaugeValueRequired{}
+			return errGaugeValueRequired
 		}
 		metric.Delta = nil
 	case model.Counter:
 		if metric.Delta == nil {
-			return errCounterDeltaRequired{}
+			return errCounterDeltaRequired
 		}
 		metric.Value = nil
 	default:
-		return errUnknownMetricType{}
+		return errUnknownMetricType
 	}
 
 	return nil
@@ -286,26 +287,9 @@ func int64Ptr(value int64) *int64 {
 	return &value
 }
 
-type errMetricIDRequired struct{}
-
-func (errMetricIDRequired) Error() string {
-	return "metric id is required"
-}
-
-type errGaugeValueRequired struct{}
-
-func (errGaugeValueRequired) Error() string {
-	return "gauge value is required"
-}
-
-type errCounterDeltaRequired struct{}
-
-func (errCounterDeltaRequired) Error() string {
-	return "counter delta is required"
-}
-
-type errUnknownMetricType struct{}
-
-func (errUnknownMetricType) Error() string {
-	return "unknown metric type"
-}
+var (
+	errMetricIDRequired     = errors.New("metric id is required")
+	errGaugeValueRequired   = errors.New("gauge value is required")
+	errCounterDeltaRequired = errors.New("counter delta is required")
+	errUnknownMetricType    = errors.New("unknown metric type")
+)

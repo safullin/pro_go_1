@@ -28,8 +28,8 @@ func NewPersistentStorage(filePath string, syncWrites bool) *PersistentStorage {
 }
 
 // UpdateGauge обновляет gauge и при необходимости синхронно сохраняет состояние.
-func (s *PersistentStorage) UpdateGauge(name string, value float64) error {
-	if err := s.MemStorage.UpdateGauge(name, value); err != nil {
+func (s *PersistentStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
+	if err := s.MemStorage.UpdateGauge(ctx, name, value); err != nil {
 		return err
 	}
 	if s.syncWrites {
@@ -41,8 +41,8 @@ func (s *PersistentStorage) UpdateGauge(name string, value float64) error {
 }
 
 // AddCounter обновляет counter и при необходимости синхронно сохраняет состояние.
-func (s *PersistentStorage) AddCounter(name string, delta int64) error {
-	if err := s.MemStorage.AddCounter(name, delta); err != nil {
+func (s *PersistentStorage) AddCounter(ctx context.Context, name string, delta int64) error {
+	if err := s.MemStorage.AddCounter(ctx, name, delta); err != nil {
 		return err
 	}
 	if s.syncWrites {

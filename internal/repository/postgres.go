@@ -18,6 +18,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/safullin/pro_go_1/internal/model"
+	"github.com/safullin/pro_go_1/internal/retry"
 )
 
 //go:embed migrations/*.sql
@@ -42,7 +43,7 @@ func NewPostgresStorage(ctx context.Context, dsn string) (*PostgresStorage, erro
 		_ = db.Close()
 		return nil, err
 	}
-	if err := migratePostgres(dsn); err != nil {
+	if err := migratePostgres(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -62,32 +63,23 @@ func (s *PostgresStorage) PingContext(ctx context.Context) error {
 	})
 }
 
-func migratePostgres(dsn string) error {
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return err
-	}
-
+func migratePostgres(db *sql.DB) error {
 	sourceDriver, err := iofs.New(migrationFiles, "migrations")
 	if err != nil {
-		_ = db.Close()
 		return err
 	}
+	defer sourceDriver.Close()
 
 	databaseDriver, err := pgmigrate.WithInstance(db, &pgmigrate.Config{})
 	if err != nil {
-		_ = sourceDriver.Close()
-		_ = db.Close()
 		return err
 	}
 
 	migrator, err := migrate.NewWithInstance("iofs", sourceDriver, "postgres", databaseDriver)
 	if err != nil {
-		_ = sourceDriver.Close()
-		_ = databaseDriver.Close()
 		return err
 	}
-	defer migrator.Close()
+	// migrator.Close закроет shared *sql.DB у postgres-драйвера; соединение закрывает PostgresStorage.Close.
 
 	if err := migrator.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("apply migrations: %w", err)
@@ -97,8 +89,8 @@ func migratePostgres(dsn string) error {
 }
 
 // UpdateGauge заменяет значение метрики типа gauge.
-func (s *PostgresStorage) UpdateGauge(name string, value float64) error {
-	return retryPostgresConnection(context.Background(), func(ctx context.Context) error {
+func (s *PostgresStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
+	return retryPostgresConnection(ctx, func(ctx context.Context) error {
 		_, err := s.db.ExecContext(
 			ctx,
 			`INSERT INTO metrics (id, type, value, delta)
@@ -114,8 +106,8 @@ func (s *PostgresStorage) UpdateGauge(name string, value float64) error {
 }
 
 // AddCounter добавляет delta к метрике типа counter.
-func (s *PostgresStorage) AddCounter(name string, delta int64) error {
-	return retryPostgresConnection(context.Background(), func(ctx context.Context) error {
+func (s *PostgresStorage) AddCounter(ctx context.Context, name string, delta int64) error {
+	return retryPostgresConnection(ctx, func(ctx context.Context) error {
 		_, err := s.db.ExecContext(
 			ctx,
 			`INSERT INTO metrics (id, type, delta, value)
@@ -320,7 +312,7 @@ func retryPostgresConnection(ctx context.Context, operation func(context.Context
 		if err == nil || !isPostgresConnectionError(err) {
 			return err
 		}
-		if err := sleepWithContext(ctx, delay); err != nil {
+		if err := retry.Sleep(ctx, delay); err != nil {
 			return err
 		}
 		err = operation(ctx)
@@ -342,19 +334,4 @@ func isPostgresConnectionError(err error) bool {
 	}
 
 	return false
-}
-
-func sleepWithContext(ctx context.Context, delay time.Duration) error {
-	if delay <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }

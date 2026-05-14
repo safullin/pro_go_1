@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/safullin/pro_go_1/internal/model"
+	"github.com/safullin/pro_go_1/internal/retry"
 )
 
 // HTTPDoer описывает клиент, умеющий отправлять HTTP-запросы.
@@ -189,7 +190,7 @@ func (a *Agent) doWithRetry(ctx context.Context, operation func() error) error {
 		if err == nil || !isRetriableAgentError(err) {
 			return err
 		}
-		if err := sleepWithContext(ctx, delay); err != nil {
+		if err := retry.Sleep(ctx, delay); err != nil {
 			return err
 		}
 		err = operation()
@@ -206,21 +207,6 @@ func isRetriableAgentError(err error) bool {
 		return false
 	}
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
-}
-
-func sleepWithContext(ctx context.Context, delay time.Duration) error {
-	if delay <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 type serverStatusError struct {

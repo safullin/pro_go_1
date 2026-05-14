@@ -1,6 +1,7 @@
 package handler_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -44,8 +45,8 @@ func TestUpdateMetricStatuses(t *testing.T) {
 
 func TestGetMetricValue(t *testing.T) {
 	storage := repository.NewMemStorage()
-	storage.UpdateGauge("Alloc", 123.456)
-	storage.AddCounter("PollCount", 7)
+	_ = storage.UpdateGauge(context.Background(), "Alloc", 123.456)
+	_ = storage.AddCounter(context.Background(), "PollCount", 7)
 	srv := server.NewServer(storage)
 
 	tests := []struct {
@@ -184,8 +185,8 @@ func TestUpdateMetricsJSONRejectsInvalidBatch(t *testing.T) {
 
 func TestGetMetricValueJSON(t *testing.T) {
 	storage := repository.NewMemStorage()
-	storage.UpdateGauge("Alloc", 123.456)
-	storage.AddCounter("PollCount", 7)
+	_ = storage.UpdateGauge(context.Background(), "Alloc", 123.456)
+	_ = storage.AddCounter(context.Background(), "PollCount", 7)
 	srv := server.NewServer(storage)
 
 	tests := []struct {
@@ -258,8 +259,8 @@ func TestGetMetricValueJSON(t *testing.T) {
 
 func TestListMetrics(t *testing.T) {
 	storage := repository.NewMemStorage()
-	storage.UpdateGauge("Alloc", 42)
-	storage.AddCounter("PollCount", 3)
+	_ = storage.UpdateGauge(context.Background(), "Alloc", 42)
+	_ = storage.AddCounter(context.Background(), "PollCount", 3)
 	srv := server.NewServer(storage)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
