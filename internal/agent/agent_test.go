@@ -220,6 +220,26 @@ func TestSetRateLimit(t *testing.T) {
 	}
 }
 
+func TestEnqueueReportJobDropsWhenQueueFull(t *testing.T) {
+	jobs := make(chan reportJob, 1)
+	jobs <- reportJob{}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		enqueueReportJob(context.Background(), jobs, reportJob{})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("enqueue report job blocked on full queue")
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("unexpected queue length: got %d want %d", len(jobs), 1)
+	}
+}
+
 func TestReportMetricsSkipsEmptyBatch(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

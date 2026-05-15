@@ -93,7 +93,7 @@ func (h *MetricsHandler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request
 			http.Error(w, "failed to update metric", http.StatusInternalServerError)
 			return
 		}
-		value, _ := h.storage.GetCounter(metric.ID)
+		value, _ := h.storage.GetCounter(r.Context(), metric.ID)
 		metric.Value = nil
 		metric.Delta = int64Ptr(value)
 	default:
@@ -136,14 +136,14 @@ func (h *MetricsHandler) GetMetricValue(w http.ResponseWriter, r *http.Request) 
 	var value string
 	switch metricType {
 	case model.Gauge:
-		gauge, ok := h.storage.GetGauge(metricName)
+		gauge, ok := h.storage.GetGauge(r.Context(), metricName)
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
 		value = strconv.FormatFloat(gauge, 'f', -1, 64)
 	case model.Counter:
-		counter, ok := h.storage.GetCounter(metricName)
+		counter, ok := h.storage.GetCounter(r.Context(), metricName)
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -173,7 +173,7 @@ func (h *MetricsHandler) GetMetricValueJSON(w http.ResponseWriter, r *http.Reque
 
 	switch metric.MType {
 	case model.Gauge:
-		value, ok := h.storage.GetGauge(metric.ID)
+		value, ok := h.storage.GetGauge(r.Context(), metric.ID)
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -181,7 +181,7 @@ func (h *MetricsHandler) GetMetricValueJSON(w http.ResponseWriter, r *http.Reque
 		metric.Delta = nil
 		metric.Value = float64Ptr(value)
 	case model.Counter:
-		value, ok := h.storage.GetCounter(metric.ID)
+		value, ok := h.storage.GetCounter(r.Context(), metric.ID)
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -197,8 +197,8 @@ func (h *MetricsHandler) GetMetricValueJSON(w http.ResponseWriter, r *http.Reque
 }
 
 // ListMetrics отдаёт HTML-страницу со списком известных метрик.
-func (h *MetricsHandler) ListMetrics(w http.ResponseWriter, _ *http.Request) {
-	metrics := h.storage.List()
+func (h *MetricsHandler) ListMetrics(w http.ResponseWriter, r *http.Request) {
+	metrics := h.storage.List(r.Context())
 
 	var body strings.Builder
 	body.WriteString("<!DOCTYPE html><html><head><title>Metrics</title></head><body><h1>Metrics</h1><ul>")

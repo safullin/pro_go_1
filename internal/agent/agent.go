@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"runtime"
@@ -75,6 +76,8 @@ type reportJob struct {
 	counters map[string]int64
 }
 
+const reportQueueMultiplier = 2
+
 // Agent собирает runtime-метрики и отправляет их на сервер.
 type Agent struct {
 	address        string
@@ -130,7 +133,7 @@ func (a *Agent) Run(ctx context.Context) {
 	a.refreshMetrics()
 	a.refreshSystemMetrics()
 
-	jobs := make(chan reportJob, a.rateLimit)
+	jobs := make(chan reportJob, a.rateLimit*reportQueueMultiplier)
 	var workers sync.WaitGroup
 	for i := 0; i < a.rateLimit; i++ {
 		workers.Add(1)
@@ -195,12 +198,22 @@ func (a *Agent) reportLoop(ctx context.Context, jobs chan<- reportJob) {
 			if len(job.metrics) == 0 {
 				continue
 			}
-			select {
-			case <-ctx.Done():
+			if !enqueueReportJob(ctx, jobs, job) && ctx.Err() != nil {
 				return
-			case jobs <- job:
 			}
 		}
+	}
+}
+
+func enqueueReportJob(ctx context.Context, jobs chan<- reportJob, job reportJob) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case jobs <- job:
+		return true
+	default:
+		log.Print("drop metrics batch: report queue is full")
+		return false
 	}
 }
 

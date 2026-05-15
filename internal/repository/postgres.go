@@ -208,9 +208,9 @@ func (s *PostgresStorage) updateMetrics(ctx context.Context, metrics []model.Met
 }
 
 // GetGauge возвращает значение gauge по имени.
-func (s *PostgresStorage) GetGauge(name string) (float64, bool) {
+func (s *PostgresStorage) GetGauge(ctx context.Context, name string) (float64, bool) {
 	var value float64
-	err := retryPostgresConnection(context.Background(), func(ctx context.Context) error {
+	err := retryPostgresConnection(ctx, func(ctx context.Context) error {
 		return s.db.QueryRowContext(
 			ctx,
 			`SELECT value FROM metrics WHERE id = $1 AND type = $2`,
@@ -226,9 +226,9 @@ func (s *PostgresStorage) GetGauge(name string) (float64, bool) {
 }
 
 // GetCounter возвращает значение counter по имени.
-func (s *PostgresStorage) GetCounter(name string) (int64, bool) {
+func (s *PostgresStorage) GetCounter(ctx context.Context, name string) (int64, bool) {
 	var value int64
-	err := retryPostgresConnection(context.Background(), func(ctx context.Context) error {
+	err := retryPostgresConnection(ctx, func(ctx context.Context) error {
 		return s.db.QueryRowContext(
 			ctx,
 			`SELECT delta FROM metrics WHERE id = $1 AND type = $2`,
@@ -244,9 +244,9 @@ func (s *PostgresStorage) GetCounter(name string) (int64, bool) {
 }
 
 // List возвращает снимок всех метрик, отсортированный по типу и имени.
-func (s *PostgresStorage) List() []model.StoredMetric {
+func (s *PostgresStorage) List(ctx context.Context) []model.StoredMetric {
 	var metrics []model.StoredMetric
-	err := retryPostgresConnection(context.Background(), func(ctx context.Context) error {
+	err := retryPostgresConnection(ctx, func(ctx context.Context) error {
 		rows, err := s.db.QueryContext(
 			ctx,
 			`SELECT id, type, delta, value FROM metrics`,

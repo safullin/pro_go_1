@@ -23,10 +23,10 @@ func TestPersistentStorageSaveAndRestore(t *testing.T) {
 		t.Fatalf("restore metrics: %v", err)
 	}
 
-	if got, ok := restored.GetGauge("Alloc"); !ok || got != 123.456 {
+	if got, ok := restored.GetGauge(context.Background(), "Alloc"); !ok || got != 123.456 {
 		t.Fatalf("unexpected restored gauge: got %v ok=%v", got, ok)
 	}
-	if got, ok := restored.GetCounter("PollCount"); !ok || got != 7 {
+	if got, ok := restored.GetCounter(context.Background(), "PollCount"); !ok || got != 7 {
 		t.Fatalf("unexpected restored counter: got %v ok=%v", got, ok)
 	}
 }
@@ -42,7 +42,7 @@ func TestPersistentStorageSyncWrites(t *testing.T) {
 		t.Fatalf("restore metrics: %v", err)
 	}
 
-	if got, ok := restored.GetGauge("Alloc"); !ok || got != 42 {
+	if got, ok := restored.GetGauge(context.Background(), "Alloc"); !ok || got != 42 {
 		t.Fatalf("unexpected restored gauge: got %v ok=%v", got, ok)
 	}
 }
@@ -68,7 +68,7 @@ func TestPersistentStoragePeriodicSaveOnShutdown(t *testing.T) {
 		t.Fatalf("restore metrics: %v", err)
 	}
 
-	if got, ok := restored.GetCounter("PollCount"); !ok || got != 3 {
+	if got, ok := restored.GetCounter(context.Background(), "PollCount"); !ok || got != 3 {
 		t.Fatalf("unexpected restored counter: got %v ok=%v", got, ok)
 	}
 }

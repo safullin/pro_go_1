@@ -14,9 +14,9 @@ type MetricsRepository interface {
 	UpdateGauge(ctx context.Context, name string, value float64) error
 	AddCounter(ctx context.Context, name string, delta int64) error
 	UpdateMetrics(ctx context.Context, metrics []model.Metrics) ([]model.Metrics, error)
-	GetGauge(name string) (float64, bool)
-	GetCounter(name string) (int64, bool)
-	List() []model.StoredMetric
+	GetGauge(ctx context.Context, name string) (float64, bool)
+	GetCounter(ctx context.Context, name string) (int64, bool)
+	List(ctx context.Context) []model.StoredMetric
 }
 
 // MemStorage хранит метрики в памяти.
@@ -89,7 +89,7 @@ func (s *MemStorage) UpdateMetrics(_ context.Context, metrics []model.Metrics) (
 }
 
 // GetGauge возвращает значение gauge по имени.
-func (s *MemStorage) GetGauge(name string) (float64, bool) {
+func (s *MemStorage) GetGauge(_ context.Context, name string) (float64, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -98,7 +98,7 @@ func (s *MemStorage) GetGauge(name string) (float64, bool) {
 }
 
 // GetCounter возвращает значение counter по имени.
-func (s *MemStorage) GetCounter(name string) (int64, bool) {
+func (s *MemStorage) GetCounter(_ context.Context, name string) (int64, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -107,7 +107,7 @@ func (s *MemStorage) GetCounter(name string) (int64, bool) {
 }
 
 // List возвращает снимок всех метрик, отсортированный по типу и имени.
-func (s *MemStorage) List() []model.StoredMetric {
+func (s *MemStorage) List(_ context.Context) []model.StoredMetric {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

@@ -152,10 +152,10 @@ func TestUpdateMetricsJSON(t *testing.T) {
 	if got := res.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
 		t.Fatalf("unexpected content type: got %q", got)
 	}
-	if got, ok := storage.GetGauge("Alloc"); !ok || got != 100.5 {
+	if got, ok := storage.GetGauge(context.Background(), "Alloc"); !ok || got != 100.5 {
 		t.Fatalf("unexpected gauge value: got %v ok=%v", got, ok)
 	}
-	if got, ok := storage.GetCounter("PollCount"); !ok || got != 7 {
+	if got, ok := storage.GetCounter(context.Background(), "PollCount"); !ok || got != 7 {
 		t.Fatalf("unexpected counter value: got %v ok=%v", got, ok)
 	}
 
@@ -181,7 +181,7 @@ func TestUpdateMetricsJSONRejectsInvalidBatch(t *testing.T) {
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected status code: got %d want %d", res.Code, http.StatusBadRequest)
 	}
-	if _, ok := storage.GetGauge("Alloc"); ok {
+	if _, ok := storage.GetGauge(context.Background(), "Alloc"); ok {
 		t.Fatal("invalid batch must not update storage")
 	}
 }
@@ -208,7 +208,7 @@ func TestUpdateMetricsJSONWithSignatureAndGzip(t *testing.T) {
 	if !signature.Valid(res.Body.Bytes(), key, res.Header().Get(signature.Header)) {
 		t.Fatalf("invalid response signature: %q", res.Header().Get(signature.Header))
 	}
-	if got, ok := storage.GetGauge("Alloc"); !ok || got != 100.5 {
+	if got, ok := storage.GetGauge(context.Background(), "Alloc"); !ok || got != 100.5 {
 		t.Fatalf("unexpected gauge value: got %v ok=%v", got, ok)
 	}
 }
