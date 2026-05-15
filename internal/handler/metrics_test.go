@@ -1,6 +1,8 @@
 package handler_test
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"github.com/safullin/pro_go_1/internal/model"
 	"github.com/safullin/pro_go_1/internal/repository"
 	"github.com/safullin/pro_go_1/internal/server"
+	"github.com/safullin/pro_go_1/internal/signature"
 )
 
 func TestUpdateMetricStatuses(t *testing.T) {
@@ -183,6 +186,33 @@ func TestUpdateMetricsJSONRejectsInvalidBatch(t *testing.T) {
 	}
 }
 
+func TestUpdateMetricsJSONWithSignatureAndGzip(t *testing.T) {
+	const key = "secret"
+
+	storage := repository.NewMemStorage()
+	srv := server.NewServerWithKey(storage, key)
+
+	body := []byte(`[{"id":"Alloc","type":"gauge","value":100.5}]`)
+	compressedBody := mustGzip(t, body)
+	req := httptest.NewRequest(http.MethodPost, "/updates/", bytes.NewReader(compressedBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set(signature.Header, signature.Sum(compressedBody, key))
+	res := httptest.NewRecorder()
+
+	srv.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d want %d", res.Code, http.StatusOK)
+	}
+	if !signature.Valid(res.Body.Bytes(), key, res.Header().Get(signature.Header)) {
+		t.Fatalf("invalid response signature: %q", res.Header().Get(signature.Header))
+	}
+	if got, ok := storage.GetGauge("Alloc"); !ok || got != 100.5 {
+		t.Fatalf("unexpected gauge value: got %v ok=%v", got, ok)
+	}
+}
+
 func TestGetMetricValueJSON(t *testing.T) {
 	storage := repository.NewMemStorage()
 	_ = storage.UpdateGauge(context.Background(), "Alloc", 123.456)
@@ -287,4 +317,18 @@ func float64Ptr(value float64) *float64 {
 
 func int64Ptr(value int64) *int64 {
 	return &value
+}
+
+func mustGzip(t *testing.T, data []byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(data); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	return buf.Bytes()
 }

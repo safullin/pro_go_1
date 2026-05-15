@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/safullin/pro_go_1/internal/model"
+	"github.com/safullin/pro_go_1/internal/signature"
 )
 
 type stubRuntimeReader struct {
@@ -22,6 +23,15 @@ type stubRuntimeReader struct {
 
 func (s stubRuntimeReader) ReadMemStats(dst *runtime.MemStats) {
 	*dst = s.stats
+}
+
+type stubSystemReader struct {
+	metrics SystemMetrics
+	err     error
+}
+
+func (s stubSystemReader) ReadSystemMetrics() (SystemMetrics, error) {
+	return s.metrics, s.err
 }
 
 type retryDoer struct {
@@ -85,6 +95,32 @@ func TestRefreshMetrics(t *testing.T) {
 	}
 	if got := metricsAgent.counters[model.PollCountMetric]; got != 2 {
 		t.Fatalf("unexpected PollCount value: got %v want %v", got, 2)
+	}
+}
+
+func TestRefreshSystemMetrics(t *testing.T) {
+	metricsAgent := New("http://localhost:8080", time.Second, time.Second)
+	metricsAgent.systemReader = stubSystemReader{
+		metrics: SystemMetrics{
+			TotalMemory:    1024,
+			FreeMemory:     512,
+			CPUUtilization: []float64{10.5, 20.5},
+		},
+	}
+
+	metricsAgent.refreshSystemMetrics()
+
+	if got := metricsAgent.gauges["TotalMemory"]; got != 1024 {
+		t.Fatalf("unexpected TotalMemory value: got %v want %v", got, 1024.0)
+	}
+	if got := metricsAgent.gauges["FreeMemory"]; got != 512 {
+		t.Fatalf("unexpected FreeMemory value: got %v want %v", got, 512.0)
+	}
+	if got := metricsAgent.gauges["CPUutilization1"]; got != 10.5 {
+		t.Fatalf("unexpected CPUutilization1 value: got %v want %v", got, 10.5)
+	}
+	if got := metricsAgent.gauges["CPUutilization2"]; got != 20.5 {
+		t.Fatalf("unexpected CPUutilization2 value: got %v want %v", got, 20.5)
 	}
 }
 
@@ -157,6 +193,33 @@ func TestReportMetrics(t *testing.T) {
 	}
 }
 
+func TestAckCountersKeepsNewValues(t *testing.T) {
+	metricsAgent := New("http://localhost:8080", time.Second, time.Second)
+	metricsAgent.counters[model.PollCountMetric] = 4
+
+	job := metricsAgent.buildReportJob()
+	metricsAgent.counters[model.PollCountMetric] = 6
+	metricsAgent.ackCounters(job.counters)
+
+	if got := metricsAgent.counters[model.PollCountMetric]; got != 2 {
+		t.Fatalf("unexpected counter value: got %d want %d", got, 2)
+	}
+}
+
+func TestSetRateLimit(t *testing.T) {
+	metricsAgent := New("http://localhost:8080", time.Second, time.Second)
+
+	metricsAgent.SetRateLimit(3)
+	if metricsAgent.rateLimit != 3 {
+		t.Fatalf("unexpected rate limit: got %d want %d", metricsAgent.rateLimit, 3)
+	}
+
+	metricsAgent.SetRateLimit(0)
+	if metricsAgent.rateLimit != 3 {
+		t.Fatalf("unexpected rate limit after invalid value: got %d want %d", metricsAgent.rateLimit, 3)
+	}
+}
+
 func TestReportMetricsSkipsEmptyBatch(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -215,5 +278,42 @@ func TestSendMetricsDoesNotRetryStatusErrors(t *testing.T) {
 	}
 	if client.calls != 1 {
 		t.Fatalf("unexpected attempts count: got %d want %d", client.calls, 1)
+	}
+}
+
+func TestSendMetricsSignsRequest(t *testing.T) {
+	const key = "secret"
+
+	var gotHash string
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHash = r.Header.Get(signature.Header)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		gotBody = body
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	metricsAgent := New(server.URL, time.Second, time.Second, key)
+	value := 100.5
+	err := metricsAgent.sendMetrics(context.Background(), []model.Metrics{
+		{
+			ID:    "Alloc",
+			MType: model.Gauge,
+			Value: &value,
+		},
+	})
+	if err != nil {
+		t.Fatalf("send metrics: %v", err)
+	}
+
+	if gotHash == "" {
+		t.Fatal("expected hash header, got empty")
+	}
+	if !signature.Valid(gotBody, key, gotHash) {
+		t.Fatalf("invalid hash header: %q", gotHash)
 	}
 }

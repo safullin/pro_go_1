@@ -11,10 +11,15 @@ import (
 	"math/rand"
 	"net/http"
 	"runtime"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/safullin/pro_go_1/internal/model"
 	"github.com/safullin/pro_go_1/internal/retry"
+	"github.com/safullin/pro_go_1/internal/signature"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 // HTTPDoer описывает клиент, умеющий отправлять HTTP-запросы.
@@ -33,53 +38,184 @@ func (runtimeReader) ReadMemStats(stats *runtime.MemStats) {
 	runtime.ReadMemStats(stats)
 }
 
+// SystemMetrics хранит метрики операционной системы.
+type SystemMetrics struct {
+	TotalMemory    uint64
+	FreeMemory     uint64
+	CPUUtilization []float64
+}
+
+// SystemReader позволяет подменять gopsutil в тестах.
+type SystemReader interface {
+	ReadSystemMetrics() (SystemMetrics, error)
+}
+
+type gopsutilSystemReader struct{}
+
+func (gopsutilSystemReader) ReadSystemMetrics() (SystemMetrics, error) {
+	virtualMemory, err := mem.VirtualMemory()
+	if err != nil {
+		return SystemMetrics{}, err
+	}
+
+	cpuUtilization, err := cpu.Percent(0, true)
+	if err != nil {
+		return SystemMetrics{}, err
+	}
+
+	return SystemMetrics{
+		TotalMemory:    virtualMemory.Total,
+		FreeMemory:     virtualMemory.Free,
+		CPUUtilization: cpuUtilization,
+	}, nil
+}
+
+type reportJob struct {
+	metrics  []model.Metrics
+	counters map[string]int64
+}
+
 // Agent собирает runtime-метрики и отправляет их на сервер.
 type Agent struct {
 	address        string
 	pollInterval   time.Duration
 	reportInterval time.Duration
+	key            string
+	rateLimit      int
 	retryDelays    []time.Duration
 	client         HTTPDoer
 	reader         RuntimeReader
+	systemReader   SystemReader
 	randomValue    func() float64
+	mu             sync.RWMutex
 	gauges         map[string]float64
 	counters       map[string]int64
 }
 
 // New создаёт нового агента.
-func New(address string, pollInterval, reportInterval time.Duration) *Agent {
+func New(address string, pollInterval, reportInterval time.Duration, keys ...string) *Agent {
+	var key string
+	if len(keys) > 0 {
+		key = keys[0]
+	}
+
 	return &Agent{
 		address:        address,
 		pollInterval:   pollInterval,
 		reportInterval: reportInterval,
+		key:            key,
+		rateLimit:      1,
 		retryDelays:    []time.Duration{time.Second, 3 * time.Second, 5 * time.Second},
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
-		reader:      runtimeReader{},
-		randomValue: rand.Float64,
-		gauges:      make(map[string]float64),
-		counters:    make(map[string]int64),
+		reader:       runtimeReader{},
+		systemReader: gopsutilSystemReader{},
+		randomValue:  rand.Float64,
+		gauges:       make(map[string]float64),
+		counters:     make(map[string]int64),
 	}
+}
+
+// SetRateLimit задаёт максимальное число одновременных исходящих запросов.
+func (a *Agent) SetRateLimit(limit int) {
+	if limit <= 0 {
+		return
+	}
+	a.rateLimit = limit
 }
 
 // Run запускает циклы обновления и отправки метрик.
 func (a *Agent) Run(ctx context.Context) {
 	a.refreshMetrics()
+	a.refreshSystemMetrics()
 
-	pollTicker := time.NewTicker(a.pollInterval)
+	jobs := make(chan reportJob, a.rateLimit)
+	var workers sync.WaitGroup
+	for i := 0; i < a.rateLimit; i++ {
+		workers.Add(1)
+		go a.reportWorker(ctx, &workers, jobs)
+	}
+
+	var collectors sync.WaitGroup
+	collectors.Add(2)
+	go func() {
+		defer collectors.Done()
+		a.collectRuntimeMetrics(ctx)
+	}()
+	go func() {
+		defer collectors.Done()
+		a.collectSystemMetrics(ctx)
+	}()
+
+	a.reportLoop(ctx, jobs)
+	collectors.Wait()
+	close(jobs)
+	workers.Wait()
+}
+
+func (a *Agent) collectRuntimeMetrics(ctx context.Context) {
+	ticker := time.NewTicker(a.pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.refreshMetrics()
+		}
+	}
+}
+
+func (a *Agent) collectSystemMetrics(ctx context.Context) {
+	ticker := time.NewTicker(a.pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.refreshSystemMetrics()
+		}
+	}
+}
+
+func (a *Agent) reportLoop(ctx context.Context, jobs chan<- reportJob) {
 	reportTicker := time.NewTicker(a.reportInterval)
-	defer pollTicker.Stop()
 	defer reportTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-pollTicker.C:
-			a.refreshMetrics()
 		case <-reportTicker.C:
-			a.reportMetrics(ctx)
+			job := a.buildReportJob()
+			if len(job.metrics) == 0 {
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- job:
+			}
+		}
+	}
+}
+
+func (a *Agent) reportWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-chan reportJob) {
+	defer wg.Done()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job, ok := <-jobs:
+			if !ok {
+				return
+			}
+			a.sendReportJob(ctx, job)
 		}
 	}
 }
@@ -87,6 +223,9 @@ func (a *Agent) Run(ctx context.Context) {
 func (a *Agent) refreshMetrics() {
 	var stats runtime.MemStats
 	a.reader.ReadMemStats(&stats)
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
 	a.gauges["Alloc"] = float64(stats.Alloc)
 	a.gauges["BuckHashSys"] = float64(stats.BuckHashSys)
@@ -119,7 +258,39 @@ func (a *Agent) refreshMetrics() {
 	a.counters[model.PollCountMetric]++
 }
 
+func (a *Agent) refreshSystemMetrics() {
+	metrics, err := a.systemReader.ReadSystemMetrics()
+	if err != nil {
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.gauges["TotalMemory"] = float64(metrics.TotalMemory)
+	a.gauges["FreeMemory"] = float64(metrics.FreeMemory)
+	for name := range a.gauges {
+		if strings.HasPrefix(name, "CPUutilization") {
+			delete(a.gauges, name)
+		}
+	}
+	for i, value := range metrics.CPUUtilization {
+		a.gauges[fmt.Sprintf("CPUutilization%d", i+1)] = value
+	}
+}
+
 func (a *Agent) reportMetrics(ctx context.Context) {
+	job := a.buildReportJob()
+	if len(job.metrics) == 0 {
+		return
+	}
+	a.sendReportJob(ctx, job)
+}
+
+func (a *Agent) buildReportJob() reportJob {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	metrics := make([]model.Metrics, 0, len(a.gauges)+len(a.counters))
 	for name, value := range a.gauges {
 		value := value
@@ -141,15 +312,46 @@ func (a *Agent) reportMetrics(ctx context.Context) {
 		})
 	}
 
-	if len(metrics) == 0 {
+	return reportJob{
+		metrics:  metrics,
+		counters: copyCounters(a.counters),
+	}
+}
+
+func (a *Agent) sendReportJob(ctx context.Context, job reportJob) {
+	if err := a.sendMetrics(ctx, job.metrics); err != nil {
 		return
 	}
-	if err := a.sendMetrics(ctx, metrics); err != nil {
+	a.ackCounters(job.counters)
+}
+
+func (a *Agent) ackCounters(sent map[string]int64) {
+	if len(sent) == 0 {
 		return
 	}
-	for name := range a.counters {
-		a.counters[name] = 0
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for name, value := range sent {
+		current := a.counters[name]
+		if current <= value {
+			a.counters[name] = 0
+			continue
+		}
+		a.counters[name] = current - value
 	}
+}
+
+func copyCounters(counters map[string]int64) map[string]int64 {
+	copied := make(map[string]int64, len(counters))
+	for name, value := range counters {
+		if value == 0 {
+			continue
+		}
+		copied[name] = value
+	}
+	return copied
 }
 
 func (a *Agent) sendMetrics(ctx context.Context, metrics []model.Metrics) error {
@@ -169,6 +371,9 @@ func (a *Agent) sendMetrics(ctx context.Context, metrics []model.Metrics) error 
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Content-Encoding", "gzip")
+		if a.key != "" {
+			req.Header.Set(signature.Header, signature.Sum(compressedBody, a.key))
+		}
 
 		resp, err := a.client.Do(req)
 		if err != nil {

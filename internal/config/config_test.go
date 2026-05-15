@@ -32,12 +32,13 @@ func TestParseServerConfig(t *testing.T) {
 		},
 		{
 			name: "custom address",
-			args: []string{"-a=localhost:9090", "-i=10", "-f=/tmp/metrics.json", "-d=postgres://user:pass@localhost/db", "-r=false"},
+			args: []string{"-a=localhost:9090", "-i=10", "-f=/tmp/metrics.json", "-d=postgres://user:pass@localhost/db", "-k=secret", "-r=false"},
 			want: ServerConfig{
 				Address:         "localhost:9090",
 				StoreInterval:   10 * time.Second,
 				FileStoragePath: "/tmp/metrics.json",
 				DatabaseDSN:     "postgres://user:pass@localhost/db",
+				Key:             "secret",
 				FileStorage:     true,
 				Restore:         false,
 			},
@@ -50,6 +51,7 @@ func TestParseServerConfig(t *testing.T) {
 				"STORE_INTERVAL":    "5",
 				"FILE_STORAGE_PATH": "/var/tmp/metrics.json",
 				"DATABASE_DSN":      "postgres://postgres:postgres@localhost/praktikum",
+				"KEY":               "env-secret",
 				"RESTORE":           "true",
 			},
 			want: ServerConfig{
@@ -57,6 +59,7 @@ func TestParseServerConfig(t *testing.T) {
 				StoreInterval:   5 * time.Second,
 				FileStoragePath: "/var/tmp/metrics.json",
 				DatabaseDSN:     "postgres://postgres:postgres@localhost/praktikum",
+				Key:             "env-secret",
 				FileStorage:     true,
 				Restore:         true,
 			},
@@ -124,29 +127,36 @@ func TestParseAgentConfig(t *testing.T) {
 				Address:        "http://" + DefaultAddress,
 				ReportInterval: 10 * time.Second,
 				PollInterval:   2 * time.Second,
+				RateLimit:      DefaultRateLimit,
 			},
 		},
 		{
 			name: "custom values",
-			args: []string{"-a=localhost:9090", "-r=3", "-p=1"},
+			args: []string{"-a=localhost:9090", "-r=3", "-p=1", "-k=secret", "-l=7"},
 			want: AgentConfig{
 				Address:        "http://localhost:9090",
 				ReportInterval: 3 * time.Second,
 				PollInterval:   1 * time.Second,
+				Key:            "secret",
+				RateLimit:      7,
 			},
 		},
 		{
 			name: "env overrides flags",
-			args: []string{"-a=localhost:9090", "-r=3", "-p=1"},
+			args: []string{"-a=localhost:9090", "-r=3", "-p=1", "-l=2"},
 			env: map[string]string{
 				"ADDRESS":         "localhost:9191",
 				"REPORT_INTERVAL": "5",
 				"POLL_INTERVAL":   "4",
+				"KEY":             "env-secret",
+				"RATE_LIMIT":      "9",
 			},
 			want: AgentConfig{
 				Address:        "http://localhost:9191",
 				ReportInterval: 5 * time.Second,
 				PollInterval:   4 * time.Second,
+				Key:            "env-secret",
+				RateLimit:      9,
 			},
 		},
 		{
@@ -156,6 +166,7 @@ func TestParseAgentConfig(t *testing.T) {
 				Address:        "http://localhost:9090",
 				ReportInterval: 10 * time.Second,
 				PollInterval:   2 * time.Second,
+				RateLimit:      DefaultRateLimit,
 			},
 		},
 		{
@@ -179,6 +190,18 @@ func TestParseAgentConfig(t *testing.T) {
 			name: "invalid poll interval from env",
 			env: map[string]string{
 				"POLL_INTERVAL": "abc",
+			},
+			wantErr: true,
+		},
+		{
+			name:    "zero rate limit",
+			args:    []string{"-l=0"},
+			wantErr: true,
+		},
+		{
+			name: "invalid rate limit from env",
+			env: map[string]string{
+				"RATE_LIMIT": "abc",
 			},
 			wantErr: true,
 		},

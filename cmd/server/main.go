@@ -38,7 +38,7 @@ func main() {
 		}
 		defer storage.Close()
 
-		handler = server.NewServer(storage, storage)
+		handler = server.NewServerWithKey(storage, cfg.Key, storage)
 	} else if cfg.FileStorage {
 		storage := repository.NewPersistentStorage(cfg.FileStoragePath, cfg.StoreInterval == 0)
 		if cfg.Restore {
@@ -49,9 +49,9 @@ func main() {
 		}
 
 		go storage.RunPersistencePeriodically(ctx, cfg.StoreInterval)
-		handler = server.NewServer(storage)
+		handler = server.NewServerWithKey(storage, cfg.Key)
 	} else {
-		handler = server.NewServer(repository.NewMemStorage())
+		handler = server.NewServerWithKey(repository.NewMemStorage(), cfg.Key)
 	}
 
 	srv := &http.Server{

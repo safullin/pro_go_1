@@ -14,6 +14,7 @@ const (
 	DefaultAddress         = "localhost:8080"
 	DefaultReportInterval  = 10 * time.Second
 	DefaultPollInterval    = 2 * time.Second
+	DefaultRateLimit       = 1
 	DefaultStoreInterval   = 300 * time.Second
 	DefaultFileStoragePath = "metrics-db.json"
 	DefaultRestore         = true
@@ -25,6 +26,7 @@ type ServerConfig struct {
 	StoreInterval   time.Duration
 	FileStoragePath string
 	DatabaseDSN     string
+	Key             string
 	FileStorage     bool
 	Restore         bool
 }
@@ -34,6 +36,8 @@ type AgentConfig struct {
 	Address        string
 	ReportInterval time.Duration
 	PollInterval   time.Duration
+	Key            string
+	RateLimit      int
 }
 
 type envLookup func(string) (string, bool)
@@ -59,6 +63,7 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	fs.IntVar(&storeIntervalSeconds, "i", storeIntervalSeconds, "store interval in seconds")
 	fs.StringVar(&cfg.FileStoragePath, "f", cfg.FileStoragePath, "path to metrics storage file")
 	fs.StringVar(&cfg.DatabaseDSN, "d", cfg.DatabaseDSN, "database connection string")
+	fs.StringVar(&cfg.Key, "k", cfg.Key, "hash signature key")
 	fs.BoolVar(&cfg.Restore, "r", cfg.Restore, "restore metrics from file on startup")
 
 	if err := fs.Parse(args); err != nil {
@@ -92,6 +97,9 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	if value, ok := lookup("DATABASE_DSN"); ok && value != "" {
 		cfg.DatabaseDSN = value
 	}
+	if value, ok := lookup("KEY"); ok && value != "" {
+		cfg.Key = value
+	}
 	if value, ok := lookup("RESTORE"); ok && value != "" {
 		restore, err := strconv.ParseBool(value)
 		if err != nil {
@@ -118,6 +126,7 @@ func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 		Address:        DefaultAddress,
 		ReportInterval: DefaultReportInterval,
 		PollInterval:   DefaultPollInterval,
+		RateLimit:      DefaultRateLimit,
 	}
 
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
@@ -125,6 +134,8 @@ func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 	fs.StringVar(&cfg.Address, "a", cfg.Address, "HTTP server address")
 	fs.IntVar(&reportIntervalSeconds, "r", reportIntervalSeconds, "report interval in seconds")
 	fs.IntVar(&pollIntervalSeconds, "p", pollIntervalSeconds, "poll interval in seconds")
+	fs.StringVar(&cfg.Key, "k", cfg.Key, "hash signature key")
+	fs.IntVar(&cfg.RateLimit, "l", cfg.RateLimit, "maximum concurrent requests")
 
 	if err := fs.Parse(args); err != nil {
 		return AgentConfig{}, err
@@ -134,6 +145,9 @@ func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 	}
 	if pollIntervalSeconds <= 0 {
 		return AgentConfig{}, fmt.Errorf("poll interval must be positive")
+	}
+	if cfg.RateLimit <= 0 {
+		return AgentConfig{}, fmt.Errorf("rate limit must be positive")
 	}
 	if value, ok := lookup("ADDRESS"); ok && value != "" {
 		cfg.Address = value
@@ -157,6 +171,19 @@ func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 			return AgentConfig{}, fmt.Errorf("poll interval must be positive")
 		}
 		pollIntervalSeconds = seconds
+	}
+	if value, ok := lookup("KEY"); ok && value != "" {
+		cfg.Key = value
+	}
+	if value, ok := lookup("RATE_LIMIT"); ok && value != "" {
+		rateLimit, err := strconv.Atoi(value)
+		if err != nil {
+			return AgentConfig{}, fmt.Errorf("invalid rate limit: %w", err)
+		}
+		if rateLimit <= 0 {
+			return AgentConfig{}, fmt.Errorf("rate limit must be positive")
+		}
+		cfg.RateLimit = rateLimit
 	}
 
 	cfg.Address = normalizeHTTPAddress(cfg.Address)

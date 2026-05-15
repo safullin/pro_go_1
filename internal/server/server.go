@@ -13,6 +13,11 @@ import (
 
 // NewServer собирает HTTP-сервер приложения на chi.
 func NewServer(storage repository.MetricsRepository, pingers ...handler.Pinger) http.Handler {
+	return NewServerWithKey(storage, "", pingers...)
+}
+
+// NewServerWithKey собирает HTTP-сервер приложения с опциональной подписью данных.
+func NewServerWithKey(storage repository.MetricsRepository, key string, pingers ...handler.Pinger) http.Handler {
 	router := chi.NewRouter()
 	metricsHandler := handler.NewMetricsHandler(storage)
 	var pinger handler.Pinger
@@ -20,6 +25,7 @@ func NewServer(storage repository.MetricsRepository, pingers ...handler.Pinger) 
 		pinger = pingers[0]
 	}
 
+	router.Use(middleware.Signature(key))
 	router.Use(middleware.Gzip)
 	router.Use(middleware.RequestLogger(logger.New()))
 	router.Get("/ping", handler.NewPingHandler(pinger).Ping)

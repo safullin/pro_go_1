@@ -21,6 +21,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	metricsAgent := agent.New(cfg.Address, cfg.PollInterval, cfg.ReportInterval)
+	metricsAgent := agent.New(cfg.Address, cfg.PollInterval, cfg.ReportInterval, cfg.Key)
+	metricsAgent.SetRateLimit(cfg.RateLimit)
 	metricsAgent.Run(ctx)
 }
