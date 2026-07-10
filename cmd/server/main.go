@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/safullin/pro_go_1/internal/audit"
 	"github.com/safullin/pro_go_1/internal/config"
 	"github.com/safullin/pro_go_1/internal/repository"
 	"github.com/safullin/pro_go_1/internal/server"
@@ -26,6 +27,15 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	observers := make([]audit.Observer, 0, 2)
+	if cfg.AuditFile != "" {
+		observers = append(observers, audit.NewFileObserver(cfg.AuditFile))
+	}
+	if cfg.AuditURL != "" {
+		observers = append(observers, audit.NewHTTPObserver(cfg.AuditURL))
+	}
+	auditor := audit.NewPublisher(observers...)
+
 	var (
 		handler http.Handler
 	)
@@ -38,7 +48,7 @@ func main() {
 		}
 		defer storage.Close()
 
-		handler = server.NewServerWithKey(storage, cfg.Key, storage)
+		handler = server.NewServerWithKeyAndAudit(storage, cfg.Key, auditor, storage)
 	} else if cfg.FileStorage {
 		storage := repository.NewPersistentStorage(cfg.FileStoragePath, cfg.StoreInterval == 0)
 		if cfg.Restore {
@@ -49,9 +59,9 @@ func main() {
 		}
 
 		go storage.RunPersistencePeriodically(ctx, cfg.StoreInterval)
-		handler = server.NewServerWithKey(storage, cfg.Key)
+		handler = server.NewServerWithKeyAndAudit(storage, cfg.Key, auditor)
 	} else {
-		handler = server.NewServerWithKey(repository.NewMemStorage(), cfg.Key)
+		handler = server.NewServerWithKeyAndAudit(repository.NewMemStorage(), cfg.Key, auditor)
 	}
 
 	srv := &http.Server{

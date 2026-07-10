@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/safullin/pro_go_1/internal/audit"
 	"github.com/safullin/pro_go_1/internal/handler"
 	"github.com/safullin/pro_go_1/internal/logger"
 	"github.com/safullin/pro_go_1/internal/middleware"
@@ -16,10 +17,18 @@ func NewServer(storage repository.MetricsRepository, pingers ...handler.Pinger) 
 	return NewServerWithKey(storage, "", pingers...)
 }
 
+func NewServerWithAudit(storage repository.MetricsRepository, auditor *audit.Publisher, pingers ...handler.Pinger) http.Handler {
+	return NewServerWithKeyAndAudit(storage, "", auditor, pingers...)
+}
+
 // NewServerWithKey собирает HTTP-сервер приложения с опциональной подписью данных.
 func NewServerWithKey(storage repository.MetricsRepository, key string, pingers ...handler.Pinger) http.Handler {
+	return NewServerWithKeyAndAudit(storage, key, nil, pingers...)
+}
+
+func NewServerWithKeyAndAudit(storage repository.MetricsRepository, key string, auditor *audit.Publisher, pingers ...handler.Pinger) http.Handler {
 	router := chi.NewRouter()
-	metricsHandler := handler.NewMetricsHandler(storage)
+	metricsHandler := handler.NewMetricsHandler(storage, auditor)
 	var pinger handler.Pinger
 	if len(pingers) > 0 {
 		pinger = pingers[0]
