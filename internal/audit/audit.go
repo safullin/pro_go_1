@@ -11,39 +11,48 @@ import (
 	"time"
 )
 
+// Event описывает событие аудита полученных метрик.
 type Event struct {
 	TS        int64    `json:"ts"`
 	Metrics   []string `json:"metrics"`
 	IPAddress string   `json:"ip_address"`
 }
 
+// Observer принимает события аудита.
 type Observer interface {
+	// Notify сохраняет событие аудита.
 	Notify(ctx context.Context, event Event) error
 }
 
+// Publisher передаёт событие всем зарегистрированным наблюдателям.
 type Publisher struct {
 	observers []Observer
 }
 
+// NewPublisher создаёт издателя событий аудита.
 func NewPublisher(observers ...Observer) *Publisher {
 	return &Publisher{observers: observers}
 }
 
+// Publish передаёт событие всем наблюдателям.
 func (p *Publisher) Publish(ctx context.Context, event Event) {
 	for _, observer := range p.observers {
 		_ = observer.Notify(ctx, event)
 	}
 }
 
+// FileObserver сохраняет события аудита в файл.
 type FileObserver struct {
 	mu   sync.Mutex
 	path string
 }
 
+// NewFileObserver создаёт наблюдателя, записывающего события в path.
 func NewFileObserver(path string) *FileObserver {
 	return &FileObserver{path: path}
 }
 
+// Notify добавляет событие в файл отдельной строкой.
 func (o *FileObserver) Notify(_ context.Context, event Event) error {
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -63,11 +72,13 @@ func (o *FileObserver) Notify(_ context.Context, event Event) error {
 	return err
 }
 
+// HTTPObserver отправляет события аудита по HTTP.
 type HTTPObserver struct {
 	client *http.Client
 	url    string
 }
 
+// NewHTTPObserver создаёт наблюдателя для отправки событий на url.
 func NewHTTPObserver(url string) *HTTPObserver {
 	return &HTTPObserver{
 		url:    url,
@@ -75,6 +86,7 @@ func NewHTTPObserver(url string) *HTTPObserver {
 	}
 }
 
+// Notify отправляет событие POST-запросом.
 func (o *HTTPObserver) Notify(ctx context.Context, event Event) error {
 	data, err := json.Marshal(event)
 	if err != nil {

@@ -17,6 +17,7 @@ func NewServer(storage repository.MetricsRepository, pingers ...handler.Pinger) 
 	return NewServerWithKey(storage, "", pingers...)
 }
 
+// NewServerWithAudit собирает HTTP-сервер с аудитом полученных метрик.
 func NewServerWithAudit(storage repository.MetricsRepository, auditor *audit.Publisher, pingers ...handler.Pinger) http.Handler {
 	return NewServerWithKeyAndAudit(storage, "", auditor, pingers...)
 }
@@ -26,6 +27,7 @@ func NewServerWithKey(storage repository.MetricsRepository, key string, pingers 
 	return NewServerWithKeyAndAudit(storage, key, nil, pingers...)
 }
 
+// NewServerWithKeyAndAudit собирает HTTP-сервер с подписью данных и аудитом.
 func NewServerWithKeyAndAudit(storage repository.MetricsRepository, key string, auditor *audit.Publisher, pingers ...handler.Pinger) http.Handler {
 	router := chi.NewRouter()
 	metricsHandler := handler.NewMetricsHandler(storage, auditor)

@@ -1,10 +1,14 @@
 package model
 
 const (
+	// Counter обозначает метрику типа counter.
 	Counter = "counter"
-	Gauge   = "gauge"
+	// Gauge обозначает метрику типа gauge.
+	Gauge = "gauge"
 
-	PollCountMetric   = "PollCount"
+	// PollCountMetric содержит число опросов runtime.
+	PollCountMetric = "PollCount"
+	// RandomValueMetric содержит случайное значение агента.
 	RandomValueMetric = "RandomValue"
 )
 

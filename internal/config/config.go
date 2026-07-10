@@ -11,13 +11,20 @@ import (
 )
 
 const (
-	DefaultAddress         = "localhost:8080"
-	DefaultReportInterval  = 10 * time.Second
-	DefaultPollInterval    = 2 * time.Second
-	DefaultRateLimit       = 1
-	DefaultStoreInterval   = 300 * time.Second
+	// DefaultAddress задаёт адрес HTTP-сервера по умолчанию.
+	DefaultAddress = "localhost:8080"
+	// DefaultReportInterval задаёт интервал отправки метрик по умолчанию.
+	DefaultReportInterval = 10 * time.Second
+	// DefaultPollInterval задаёт интервал сбора метрик по умолчанию.
+	DefaultPollInterval = 2 * time.Second
+	// DefaultRateLimit задаёт число одновременных запросов агента по умолчанию.
+	DefaultRateLimit = 1
+	// DefaultStoreInterval задаёт интервал сохранения метрик по умолчанию.
+	DefaultStoreInterval = 300 * time.Second
+	// DefaultFileStoragePath задаёт путь к файловому хранилищу по умолчанию.
 	DefaultFileStoragePath = "metrics-db.json"
-	DefaultRestore         = true
+	// DefaultRestore определяет восстановление метрик из файла по умолчанию.
+	DefaultRestore = true
 )
 
 // ServerConfig хранит параметры запуска HTTP-сервера.
