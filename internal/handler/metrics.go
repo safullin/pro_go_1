@@ -5,12 +5,15 @@ import (
 	"errors"
 	"html"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/safullin/pro_go_1/internal/audit"
 	"github.com/safullin/pro_go_1/internal/model"
 	"github.com/safullin/pro_go_1/internal/repository"
 )
@@ -18,11 +21,16 @@ import (
 // MetricsHandler обновляет метрики по HTTP.
 type MetricsHandler struct {
 	storage repository.MetricsRepository
+	auditor *audit.Publisher
 }
 
 // NewMetricsHandler создаёт обработчик поверх хранилища.
-func NewMetricsHandler(storage repository.MetricsRepository) *MetricsHandler {
-	return &MetricsHandler{storage: storage}
+func NewMetricsHandler(storage repository.MetricsRepository, auditors ...*audit.Publisher) *MetricsHandler {
+	var auditor *audit.Publisher
+	if len(auditors) > 0 {
+		auditor = auditors[0]
+	}
+	return &MetricsHandler{storage: storage, auditor: auditor}
 }
 
 // UpdateMetric обрабатывает POST /update/{type}/{name}/{value}.
@@ -59,6 +67,7 @@ func (h *MetricsHandler) UpdateMetric(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
+	h.publish(r, []string{metricName})
 }
 
 // UpdateMetricJSON обрабатывает POST /update/.
@@ -102,6 +111,7 @@ func (h *MetricsHandler) UpdateMetricJSON(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, metric)
+	h.publish(r, []string{metric.ID})
 }
 
 // UpdateMetricsJSON обрабатывает POST /updates/.
@@ -126,6 +136,7 @@ func (h *MetricsHandler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Reques
 	}
 
 	writeJSONMetrics(w, http.StatusOK, updated)
+	h.publish(r, metricNames(metrics))
 }
 
 // GetMetricValue возвращает текущее значение метрики в text/plain.
@@ -285,6 +296,33 @@ func float64Ptr(value float64) *float64 {
 
 func int64Ptr(value int64) *int64 {
 	return &value
+}
+
+func (h *MetricsHandler) publish(r *http.Request, metrics []string) {
+	if h.auditor == nil {
+		return
+	}
+	h.auditor.Publish(r.Context(), audit.Event{
+		TS:        time.Now().Unix(),
+		Metrics:   metrics,
+		IPAddress: clientIP(r.RemoteAddr),
+	})
+}
+
+func metricNames(metrics []model.Metrics) []string {
+	names := make([]string, len(metrics))
+	for i := range metrics {
+		names[i] = metrics[i].ID
+	}
+	return names
+}
+
+func clientIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return host
 }
 
 var (
