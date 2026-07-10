@@ -136,7 +136,7 @@ func (h *MetricsHandler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Reques
 	}
 
 	writeJSONMetrics(w, http.StatusOK, updated)
-	h.publish(r, metricNames(metrics))
+	h.publishMetrics(r, metrics)
 }
 
 // GetMetricValue возвращает текущее значение метрики в text/plain.
@@ -309,12 +309,16 @@ func (h *MetricsHandler) publish(r *http.Request, metrics []string) {
 	})
 }
 
-func metricNames(metrics []model.Metrics) []string {
+func (h *MetricsHandler) publishMetrics(r *http.Request, metrics []model.Metrics) {
+	if h.auditor == nil {
+		return
+	}
+
 	names := make([]string, len(metrics))
 	for i := range metrics {
 		names[i] = metrics[i].ID
 	}
-	return names
+	h.publish(r, names)
 }
 
 func clientIP(remoteAddr string) string {
