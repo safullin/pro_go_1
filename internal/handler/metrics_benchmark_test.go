@@ -15,9 +15,8 @@ func BenchmarkUpdateMetricsJSON(b *testing.B) {
 
 	metricsHandler := handler.NewMetricsHandler(repository.NewMemStorage())
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		req := httptest.NewRequest(http.MethodPost, "/updates/", strings.NewReader(body))
 		res := httptest.NewRecorder()
 		metricsHandler.UpdateMetricsJSON(res, req)

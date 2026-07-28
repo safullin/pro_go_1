@@ -20,9 +20,8 @@ func BenchmarkMemStorageUpdateMetrics(b *testing.B) {
 	ctx := context.Background()
 
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := storage.UpdateMetrics(ctx, metrics); err != nil {
 			b.Fatalf("update metrics: %v", err)
 		}

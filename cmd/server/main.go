@@ -29,12 +29,23 @@ func main() {
 
 	observers := make([]audit.Observer, 0, 2)
 	if cfg.AuditFile != "" {
-		observers = append(observers, audit.NewFileObserver(cfg.AuditFile))
+		fileObserver, err := audit.NewFileObserver(cfg.AuditFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		defer func() {
+			if err := fileObserver.Close(); err != nil {
+				log.Printf("close audit file: %v", err)
+			}
+		}()
+		observers = append(observers, fileObserver)
 	}
 	if cfg.AuditURL != "" {
 		observers = append(observers, audit.NewHTTPObserver(cfg.AuditURL))
 	}
 	auditor := audit.NewPublisher(observers...)
+	defer auditor.Close()
 
 	var (
 		handler http.Handler

@@ -216,13 +216,16 @@ func TestSuccessfulUpdatesPublishAuditEvent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			observer := &auditObserver{}
-			srv := server.NewServerWithAudit(repository.NewMemStorage(), audit.NewPublisher(observer))
+			observer := newAuditObserver()
+			auditor := audit.NewPublisher(observer)
+			t.Cleanup(auditor.Close)
+			srv := server.NewServerWithAudit(repository.NewMemStorage(), auditor)
 			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
 			req.RemoteAddr = "192.168.0.42:12345"
 			res := httptest.NewRecorder()
 
 			srv.ServeHTTP(res, req)
+			auditor.Close()
 
 			if res.Code != http.StatusOK {
 				t.Fatalf("unexpected status code: got %d want %d", res.Code, http.StatusOK)
@@ -230,7 +233,7 @@ func TestSuccessfulUpdatesPublishAuditEvent(t *testing.T) {
 			if len(observer.events) != 1 {
 				t.Fatalf("unexpected audit events count: got %d want %d", len(observer.events), 1)
 			}
-			event := observer.events[0]
+			event := <-observer.events
 			if event.TS == 0 || event.IPAddress != "192.168.0.42" || !reflect.DeepEqual(event.Metrics, tt.metrics) {
 				t.Fatalf("unexpected audit event: %#v", event)
 			}
@@ -239,12 +242,15 @@ func TestSuccessfulUpdatesPublishAuditEvent(t *testing.T) {
 }
 
 func TestFailedUpdateDoesNotPublishAuditEvent(t *testing.T) {
-	observer := &auditObserver{}
-	srv := server.NewServerWithAudit(repository.NewMemStorage(), audit.NewPublisher(observer))
+	observer := newAuditObserver()
+	auditor := audit.NewPublisher(observer)
+	t.Cleanup(auditor.Close)
+	srv := server.NewServerWithAudit(repository.NewMemStorage(), auditor)
 	req := httptest.NewRequest(http.MethodPost, "/update/gauge/Alloc/not-number", nil)
 	res := httptest.NewRecorder()
 
 	srv.ServeHTTP(res, req)
+	auditor.Close()
 
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected status code: got %d want %d", res.Code, http.StatusBadRequest)
@@ -388,11 +394,15 @@ func int64Ptr(value int64) *int64 {
 }
 
 type auditObserver struct {
-	events []audit.Event
+	events chan audit.Event
+}
+
+func newAuditObserver() *auditObserver {
+	return &auditObserver{events: make(chan audit.Event, 8)}
 }
 
 func (o *auditObserver) Notify(_ context.Context, event audit.Event) error {
-	o.events = append(o.events, event)
+	o.events <- event
 	return nil
 }
 

@@ -13,7 +13,7 @@ import (
 	"github.com/safullin/pro_go_1/internal/repository"
 )
 
-func Example_updateMetrics() {
+func ExampleMetricsHandler_UpdateMetricsJSON() {
 	storage := repository.NewMemStorage()
 	metricsHandler := handler.NewMetricsHandler(storage)
 
@@ -29,7 +29,7 @@ func Example_updateMetrics() {
 	// [{"id":"Alloc","type":"gauge","value":100.5},{"id":"PollCount","type":"counter","delta":3}]
 }
 
-func Example_getMetricValue() {
+func ExampleMetricsHandler_GetMetricValue() {
 	storage := repository.NewMemStorage()
 	_ = storage.UpdateGauge(context.Background(), "Alloc", 100.5)
 	metricsHandler := handler.NewMetricsHandler(storage)
