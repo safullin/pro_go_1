@@ -12,12 +12,21 @@ import (
 	"time"
 
 	"github.com/safullin/pro_go_1/internal/audit"
+	"github.com/safullin/pro_go_1/internal/buildinfo"
 	"github.com/safullin/pro_go_1/internal/config"
 	"github.com/safullin/pro_go_1/internal/repository"
 	"github.com/safullin/pro_go_1/internal/server"
 )
 
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
 func main() {
+	buildinfo.Print(os.Stdout, buildVersion, buildDate, buildCommit)
+
 	cfg, err := config.ParseServerConfig(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

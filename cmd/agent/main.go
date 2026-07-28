@@ -8,10 +8,19 @@ import (
 	"syscall"
 
 	"github.com/safullin/pro_go_1/internal/agent"
+	"github.com/safullin/pro_go_1/internal/buildinfo"
 	"github.com/safullin/pro_go_1/internal/config"
 )
 
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
 func main() {
+	buildinfo.Print(os.Stdout, buildVersion, buildDate, buildCommit)
+
 	cfg, err := config.ParseAgentConfig(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
