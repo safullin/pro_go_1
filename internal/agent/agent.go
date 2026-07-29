@@ -141,11 +141,12 @@ func (a *Agent) Run(ctx context.Context) {
 	a.refreshMetrics()
 	a.refreshSystemMetrics()
 
+	deliveryCtx := context.WithoutCancel(ctx)
 	jobs := make(chan reportJob, a.rateLimit*reportQueueMultiplier)
 	var workers sync.WaitGroup
 	for i := 0; i < a.rateLimit; i++ {
 		workers.Add(1)
-		go a.reportWorker(ctx, &workers, jobs)
+		go a.reportWorker(deliveryCtx, &workers, jobs)
 	}
 
 	var collectors sync.WaitGroup
@@ -163,6 +164,11 @@ func (a *Agent) Run(ctx context.Context) {
 	collectors.Wait()
 	close(jobs)
 	workers.Wait()
+
+	finalJob := a.buildReportJob()
+	if len(finalJob.metrics) > 0 {
+		a.sendReportJob(deliveryCtx, finalJob)
+	}
 }
 
 func (a *Agent) collectRuntimeMetrics(ctx context.Context) {
@@ -228,16 +234,8 @@ func enqueueReportJob(ctx context.Context, jobs chan<- reportJob, job reportJob)
 func (a *Agent) reportWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-chan reportJob) {
 	defer wg.Done()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case job, ok := <-jobs:
-			if !ok {
-				return
-			}
-			a.sendReportJob(ctx, job)
-		}
+	for job := range jobs {
+		a.sendReportJob(ctx, job)
 	}
 }
 

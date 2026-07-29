@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/safullin/pro_go_1/internal/audit"
 	"github.com/safullin/pro_go_1/internal/buildinfo"
@@ -35,7 +35,12 @@ func main() {
 		os.Exit(2)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+	)
 	defer stop()
 
 	var decryptMiddleware func(http.Handler) http.Handler
@@ -69,7 +74,9 @@ func main() {
 	defer auditor.Close()
 
 	var (
-		handler http.Handler
+		handler         http.Handler
+		persistenceDone <-chan struct{}
+		flushStorage    func() error
 	)
 
 	if cfg.DatabaseDSN != "" {
@@ -90,7 +97,13 @@ func main() {
 			}
 		}
 
-		go storage.RunPersistencePeriodically(ctx, cfg.StoreInterval)
+		done := make(chan struct{})
+		persistenceDone = done
+		flushStorage = storage.Save
+		go func() {
+			defer close(done)
+			storage.RunPersistencePeriodically(ctx, cfg.StoreInterval)
+		}()
 		handler = server.NewServerWithKeyAndAudit(storage, cfg.Key, auditor)
 	} else {
 		handler = server.NewServerWithKeyAndAudit(repository.NewMemStorage(), cfg.Key, auditor)
@@ -104,14 +117,44 @@ func main() {
 		Handler: handler,
 	}
 
+	listener, err := net.Listen("tcp", cfg.Address)
+	if err != nil {
+		log.Fatal(err)
+	}
+	serveErr := runServer(ctx, srv, listener)
+	stop()
+
+	if persistenceDone != nil {
+		<-persistenceDone
+	}
+	if flushStorage != nil {
+		if err := flushStorage(); err != nil {
+			log.Printf("save metrics on shutdown: %v", err)
+		}
+	}
+	if serveErr != nil {
+		log.Fatal(serveErr)
+	}
+}
+
+func runServer(ctx context.Context, srv *http.Server, listener net.Listener) error {
+	serveErrors := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		serveErrors <- srv.Serve(listener)
 	}()
 
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+	select {
+	case err := <-serveErrors:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownErr := srv.Shutdown(context.Background())
+		serveErr := <-serveErrors
+		if errors.Is(serveErr, http.ErrServerClosed) {
+			serveErr = nil
+		}
+		return errors.Join(shutdownErr, serveErr)
 	}
 }
