@@ -59,14 +59,19 @@ func ParseServerConfig(args []string) (ServerConfig, error) {
 }
 
 func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
-	storeIntervalSeconds := int(DefaultStoreInterval / time.Second)
-
 	cfg := ServerConfig{
 		Address:         DefaultAddress,
 		StoreInterval:   DefaultStoreInterval,
 		FileStoragePath: DefaultFileStoragePath,
 		Restore:         DefaultRestore,
 	}
+	configFile := findConfigPath(args, lookup)
+	if configFile != "" {
+		if err := loadServerFileConfig(configFile, &cfg); err != nil {
+			return ServerConfig{}, err
+		}
+	}
+	storeIntervalSeconds := int(cfg.StoreInterval / time.Second)
 
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -79,17 +84,26 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	fs.BoolVar(&cfg.Restore, "r", cfg.Restore, "restore metrics from file on startup")
 	fs.StringVar(&cfg.AuditFile, "audit-file", cfg.AuditFile, "audit log file")
 	fs.StringVar(&cfg.AuditURL, "audit-url", cfg.AuditURL, "audit receiver URL")
+	fs.StringVar(&configFile, "c", configFile, "config file")
+	fs.StringVar(&configFile, "config", configFile, "config file")
 
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
 	}
-	fs.Visit(func(flag *flag.Flag) {
-		if flag.Name == "f" && cfg.FileStoragePath != "" {
-			cfg.FileStorage = true
+	var storeIntervalFlagSet bool
+	fs.Visit(func(visited *flag.Flag) {
+		switch visited.Name {
+		case "f":
+			cfg.FileStorage = cfg.FileStoragePath != ""
+		case "i":
+			storeIntervalFlagSet = true
 		}
 	})
-	if storeIntervalSeconds < 0 {
-		return ServerConfig{}, fmt.Errorf("store interval must be non-negative")
+	if storeIntervalFlagSet {
+		if storeIntervalSeconds < 0 {
+			return ServerConfig{}, fmt.Errorf("store interval must be non-negative")
+		}
+		cfg.StoreInterval = time.Duration(storeIntervalSeconds) * time.Second
 	}
 	if value, ok := lookup("ADDRESS"); ok && value != "" {
 		cfg.Address = value
@@ -102,7 +116,11 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 		if seconds < 0 {
 			return ServerConfig{}, fmt.Errorf("store interval must be non-negative")
 		}
-		storeIntervalSeconds = seconds
+		cfg.StoreInterval = time.Duration(seconds) * time.Second
+	}
+	if value, ok := lookup("STORE_FILE"); ok && value != "" {
+		cfg.FileStoragePath = value
+		cfg.FileStorage = true
 	}
 	if value, ok := lookup("FILE_STORAGE_PATH"); ok && value != "" {
 		cfg.FileStoragePath = value
@@ -131,8 +149,6 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 		cfg.Restore = restore
 	}
 
-	cfg.StoreInterval = time.Duration(storeIntervalSeconds) * time.Second
-
 	return cfg, nil
 }
 
@@ -142,15 +158,20 @@ func ParseAgentConfig(args []string) (AgentConfig, error) {
 }
 
 func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
-	reportIntervalSeconds := int(DefaultReportInterval / time.Second)
-	pollIntervalSeconds := int(DefaultPollInterval / time.Second)
-
 	cfg := AgentConfig{
 		Address:        DefaultAddress,
 		ReportInterval: DefaultReportInterval,
 		PollInterval:   DefaultPollInterval,
 		RateLimit:      DefaultRateLimit,
 	}
+	configFile := findConfigPath(args, lookup)
+	if configFile != "" {
+		if err := loadAgentFileConfig(configFile, &cfg); err != nil {
+			return AgentConfig{}, err
+		}
+	}
+	reportIntervalSeconds := int(cfg.ReportInterval / time.Second)
+	pollIntervalSeconds := int(cfg.PollInterval / time.Second)
 
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -160,15 +181,33 @@ func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 	fs.StringVar(&cfg.Key, "k", cfg.Key, "hash signature key")
 	fs.StringVar(&cfg.CryptoKey, "crypto-key", cfg.CryptoKey, "public key file")
 	fs.IntVar(&cfg.RateLimit, "l", cfg.RateLimit, "maximum concurrent requests")
+	fs.StringVar(&configFile, "c", configFile, "config file")
+	fs.StringVar(&configFile, "config", configFile, "config file")
 
 	if err := fs.Parse(args); err != nil {
 		return AgentConfig{}, err
 	}
-	if reportIntervalSeconds <= 0 {
-		return AgentConfig{}, fmt.Errorf("report interval must be positive")
+	var reportIntervalFlagSet bool
+	var pollIntervalFlagSet bool
+	fs.Visit(func(visited *flag.Flag) {
+		switch visited.Name {
+		case "r":
+			reportIntervalFlagSet = true
+		case "p":
+			pollIntervalFlagSet = true
+		}
+	})
+	if reportIntervalFlagSet {
+		if reportIntervalSeconds <= 0 {
+			return AgentConfig{}, fmt.Errorf("report interval must be positive")
+		}
+		cfg.ReportInterval = time.Duration(reportIntervalSeconds) * time.Second
 	}
-	if pollIntervalSeconds <= 0 {
-		return AgentConfig{}, fmt.Errorf("poll interval must be positive")
+	if pollIntervalFlagSet {
+		if pollIntervalSeconds <= 0 {
+			return AgentConfig{}, fmt.Errorf("poll interval must be positive")
+		}
+		cfg.PollInterval = time.Duration(pollIntervalSeconds) * time.Second
 	}
 	if cfg.RateLimit <= 0 {
 		return AgentConfig{}, fmt.Errorf("rate limit must be positive")
@@ -184,7 +223,7 @@ func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 		if seconds <= 0 {
 			return AgentConfig{}, fmt.Errorf("report interval must be positive")
 		}
-		reportIntervalSeconds = seconds
+		cfg.ReportInterval = time.Duration(seconds) * time.Second
 	}
 	if value, ok := lookup("POLL_INTERVAL"); ok && value != "" {
 		seconds, err := strconv.Atoi(value)
@@ -194,7 +233,7 @@ func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 		if seconds <= 0 {
 			return AgentConfig{}, fmt.Errorf("poll interval must be positive")
 		}
-		pollIntervalSeconds = seconds
+		cfg.PollInterval = time.Duration(seconds) * time.Second
 	}
 	if value, ok := lookup("KEY"); ok && value != "" {
 		cfg.Key = value
@@ -214,8 +253,6 @@ func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 	}
 
 	cfg.Address = normalizeHTTPAddress(cfg.Address)
-	cfg.ReportInterval = time.Duration(reportIntervalSeconds) * time.Second
-	cfg.PollInterval = time.Duration(pollIntervalSeconds) * time.Second
 
 	return cfg, nil
 }
