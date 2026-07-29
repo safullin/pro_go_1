@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/safullin/pro_go_1/internal/cryptoutil"
 	"github.com/safullin/pro_go_1/internal/model"
 	"github.com/safullin/pro_go_1/internal/signature"
 )
@@ -336,4 +340,64 @@ func TestSendMetricsSignsRequest(t *testing.T) {
 	if !signature.Valid(gotBody, key, gotHash) {
 		t.Fatalf("invalid hash header: %q", gotHash)
 	}
+}
+
+func TestSendMetricsEncryptsRequest(t *testing.T) {
+	const key = "secret"
+	privateKey := generateAgentRSAKey(t)
+	var received []model.Metrics
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(cryptoutil.Header); got != cryptoutil.Algorithm {
+			t.Fatalf("encryption header = %q, want %q", got, cryptoutil.Algorithm)
+		}
+		encrypted, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read encrypted body: %v", err)
+		}
+		compressed, err := cryptoutil.Decrypt(encrypted, privateKey)
+		if err != nil {
+			t.Fatalf("decrypt body: %v", err)
+		}
+		if !signature.Valid(compressed, key, r.Header.Get(signature.Header)) {
+			t.Fatal("request signature is invalid")
+		}
+
+		reader, err := gzip.NewReader(bytes.NewReader(compressed))
+		if err != nil {
+			t.Fatalf("open gzip body: %v", err)
+		}
+		defer reader.Close()
+		if err := json.NewDecoder(reader).Decode(&received); err != nil {
+			t.Fatalf("decode metrics: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	metricsAgent := New(server.URL, time.Second, time.Second, key)
+	metricsAgent.SetPublicKey(&privateKey.PublicKey)
+	value := 100.5
+	err := metricsAgent.sendMetrics(context.Background(), []model.Metrics{
+		{
+			ID:    "Alloc",
+			MType: model.Gauge,
+			Value: &value,
+		},
+	})
+	if err != nil {
+		t.Fatalf("send metrics: %v", err)
+	}
+	if len(received) != 1 || received[0].ID != "Alloc" {
+		t.Fatalf("received metrics = %#v", received)
+	}
+}
+
+func generateAgentRSAKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
+	return key
 }
