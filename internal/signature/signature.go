@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 )
 
+// Header содержит имя HTTP-заголовка с подписью тела.
 const Header = "HashSHA256"
 
 // Sum возвращает HMAC-SHA256 для data с симметричным ключом key.

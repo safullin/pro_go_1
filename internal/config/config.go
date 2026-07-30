@@ -11,13 +11,20 @@ import (
 )
 
 const (
-	DefaultAddress         = "localhost:8080"
-	DefaultReportInterval  = 10 * time.Second
-	DefaultPollInterval    = 2 * time.Second
-	DefaultRateLimit       = 1
-	DefaultStoreInterval   = 300 * time.Second
+	// DefaultAddress задаёт адрес HTTP-сервера по умолчанию.
+	DefaultAddress = "localhost:8080"
+	// DefaultReportInterval задаёт интервал отправки метрик по умолчанию.
+	DefaultReportInterval = 10 * time.Second
+	// DefaultPollInterval задаёт интервал сбора метрик по умолчанию.
+	DefaultPollInterval = 2 * time.Second
+	// DefaultRateLimit задаёт число одновременных запросов агента по умолчанию.
+	DefaultRateLimit = 1
+	// DefaultStoreInterval задаёт интервал сохранения метрик по умолчанию.
+	DefaultStoreInterval = 300 * time.Second
+	// DefaultFileStoragePath задаёт путь к файловому хранилищу по умолчанию.
 	DefaultFileStoragePath = "metrics-db.json"
-	DefaultRestore         = true
+	// DefaultRestore определяет восстановление метрик из файла по умолчанию.
+	DefaultRestore = true
 )
 
 // ServerConfig хранит параметры запуска HTTP-сервера.
@@ -27,6 +34,8 @@ type ServerConfig struct {
 	FileStoragePath string
 	DatabaseDSN     string
 	Key             string
+	AuditFile       string
+	AuditURL        string
 	FileStorage     bool
 	Restore         bool
 }
@@ -65,6 +74,8 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	fs.StringVar(&cfg.DatabaseDSN, "d", cfg.DatabaseDSN, "database connection string")
 	fs.StringVar(&cfg.Key, "k", cfg.Key, "hash signature key")
 	fs.BoolVar(&cfg.Restore, "r", cfg.Restore, "restore metrics from file on startup")
+	fs.StringVar(&cfg.AuditFile, "audit-file", cfg.AuditFile, "audit log file")
+	fs.StringVar(&cfg.AuditURL, "audit-url", cfg.AuditURL, "audit receiver URL")
 
 	if err := fs.Parse(args); err != nil {
 		return ServerConfig{}, err
@@ -99,6 +110,12 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	}
 	if value, ok := lookup("KEY"); ok && value != "" {
 		cfg.Key = value
+	}
+	if value, ok := lookup("AUDIT_FILE"); ok && value != "" {
+		cfg.AuditFile = value
+	}
+	if value, ok := lookup("AUDIT_URL"); ok && value != "" {
+		cfg.AuditURL = value
 	}
 	if value, ok := lookup("RESTORE"); ok && value != "" {
 		restore, err := strconv.ParseBool(value)

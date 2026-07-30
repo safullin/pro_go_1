@@ -16,10 +16,12 @@ type PingHandler struct {
 	pinger Pinger
 }
 
+// NewPingHandler создаёт обработчик проверки соединения с базой данных.
 func NewPingHandler(pinger Pinger) *PingHandler {
 	return &PingHandler{pinger: pinger}
 }
 
+// Ping обрабатывает GET /ping.
 func (h *PingHandler) Ping(w http.ResponseWriter, r *http.Request) {
 	if h.pinger == nil {
 		http.Error(w, "database is not configured", http.StatusInternalServerError)

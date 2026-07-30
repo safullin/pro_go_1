@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/safullin/pro_go_1/internal/audit"
 	"github.com/safullin/pro_go_1/internal/model"
 	"github.com/safullin/pro_go_1/internal/repository"
 	"github.com/safullin/pro_go_1/internal/server"
@@ -186,6 +188,78 @@ func TestUpdateMetricsJSONRejectsInvalidBatch(t *testing.T) {
 	}
 }
 
+func TestSuccessfulUpdatesPublishAuditEvent(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		body    string
+		metrics []string
+	}{
+		{
+			name:    "path update",
+			path:    "/update/gauge/Alloc/100.5",
+			metrics: []string{"Alloc"},
+		},
+		{
+			name:    "json update",
+			path:    "/update/",
+			body:    `{"id":"PollCount","type":"counter","delta":4}`,
+			metrics: []string{"PollCount"},
+		},
+		{
+			name:    "batch update",
+			path:    "/updates/",
+			body:    `[{"id":"Alloc","type":"gauge","value":100.5},{"id":"PollCount","type":"counter","delta":4}]`,
+			metrics: []string{"Alloc", "PollCount"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			observer := newAuditObserver()
+			auditor := audit.NewPublisher(observer)
+			t.Cleanup(auditor.Close)
+			srv := server.NewServerWithAudit(repository.NewMemStorage(), auditor)
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			req.RemoteAddr = "192.168.0.42:12345"
+			res := httptest.NewRecorder()
+
+			srv.ServeHTTP(res, req)
+			auditor.Close()
+
+			if res.Code != http.StatusOK {
+				t.Fatalf("unexpected status code: got %d want %d", res.Code, http.StatusOK)
+			}
+			if len(observer.events) != 1 {
+				t.Fatalf("unexpected audit events count: got %d want %d", len(observer.events), 1)
+			}
+			event := <-observer.events
+			if event.TS == 0 || event.IPAddress != "192.168.0.42" || !reflect.DeepEqual(event.Metrics, tt.metrics) {
+				t.Fatalf("unexpected audit event: %#v", event)
+			}
+		})
+	}
+}
+
+func TestFailedUpdateDoesNotPublishAuditEvent(t *testing.T) {
+	observer := newAuditObserver()
+	auditor := audit.NewPublisher(observer)
+	t.Cleanup(auditor.Close)
+	srv := server.NewServerWithAudit(repository.NewMemStorage(), auditor)
+	req := httptest.NewRequest(http.MethodPost, "/update/gauge/Alloc/not-number", nil)
+	res := httptest.NewRecorder()
+
+	srv.ServeHTTP(res, req)
+	auditor.Close()
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status code: got %d want %d", res.Code, http.StatusBadRequest)
+	}
+	if len(observer.events) != 0 {
+		t.Fatalf("unexpected audit events: %#v", observer.events)
+	}
+}
+
 func TestUpdateMetricsJSONWithSignatureAndGzip(t *testing.T) {
 	const key = "secret"
 
@@ -317,6 +391,19 @@ func float64Ptr(value float64) *float64 {
 
 func int64Ptr(value int64) *int64 {
 	return &value
+}
+
+type auditObserver struct {
+	events chan audit.Event
+}
+
+func newAuditObserver() *auditObserver {
+	return &auditObserver{events: make(chan audit.Event, 8)}
+}
+
+func (o *auditObserver) Notify(_ context.Context, event audit.Event) error {
+	o.events <- event
+	return nil
 }
 
 func mustGzip(t *testing.T, data []byte) []byte {
