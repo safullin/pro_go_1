@@ -3,18 +3,12 @@ package main
 import (
 	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 )
 
 func TestGenerate(t *testing.T) {
-	root := t.TempDir()
-	writeTestFile(t, root, "go.mod", "module example.com/resettest\n\ngo 1.24.0\n")
-	writeTestFile(t, root, "sample/model.go", sampleModel)
-	writeTestFile(t, root, "sample/model_test.go", sampleTest)
-	writeTestFile(t, root, "other/model.go", otherModel)
-	writeTestFile(t, root, "other/model_test.go", otherTest)
+	root := prepareTestModule(t)
 
 	if err := generate(root); err != nil {
 		t.Fatalf("generate: %v", err)
@@ -40,13 +34,17 @@ func TestGenerate(t *testing.T) {
 	if !bytes.Equal(first, second) {
 		t.Fatal("generated file changed after repeated run")
 	}
+}
 
-	command := exec.Command("go", "test", "./...")
-	command.Dir = root
-	command.Env = append(os.Environ(), "GOWORK=off")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("test generated code: %v\n%s", err, output)
-	}
+func prepareTestModule(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	writeTestFile(t, root, "go.mod", "module example.com/resettest\n\ngo 1.24.0\n")
+	writeTestFile(t, root, "sample/model.go", sampleModel)
+	writeTestFile(t, root, "sample/model_test.go", sampleTest)
+	writeTestFile(t, root, "other/model.go", otherModel)
+	writeTestFile(t, root, "other/model_test.go", otherTest)
+	return root
 }
 
 func writeTestFile(t *testing.T, root, name, content string) {

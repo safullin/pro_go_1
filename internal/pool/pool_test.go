@@ -35,6 +35,14 @@ func TestPoolGet(t *testing.T) {
 	}
 }
 
+func TestPoolGetWithoutFactory(t *testing.T) {
+	values := New[*testValue](nil)
+
+	if value := values.Get(); value != nil {
+		t.Fatalf("Get() = %#v, want nil", value)
+	}
+}
+
 func TestPoolPutResetsValue(t *testing.T) {
 	values := New(func() *testValue {
 		return &testValue{}
