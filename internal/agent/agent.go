@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/safullin/pro_go_1/internal/cryptoutil"
 	"github.com/safullin/pro_go_1/internal/model"
 	"github.com/safullin/pro_go_1/internal/retry"
 	"github.com/safullin/pro_go_1/internal/signature"
@@ -84,6 +86,7 @@ type Agent struct {
 	pollInterval   time.Duration
 	reportInterval time.Duration
 	key            string
+	publicKey      *rsa.PublicKey
 	rateLimit      int
 	retryDelays    []time.Duration
 	client         HTTPDoer
@@ -118,6 +121,11 @@ func New(address string, pollInterval, reportInterval time.Duration, keys ...str
 		gauges:       make(map[string]float64),
 		counters:     make(map[string]int64),
 	}
+}
+
+// SetPublicKey задаёт публичный ключ для шифрования запросов.
+func (a *Agent) SetPublicKey(key *rsa.PublicKey) {
+	a.publicKey = key
 }
 
 // SetRateLimit задаёт максимальное число одновременных исходящих запросов.
@@ -376,14 +384,24 @@ func (a *Agent) sendMetrics(ctx context.Context, metrics []model.Metrics) error 
 	if err != nil {
 		return err
 	}
+	requestBody := compressedBody
+	if a.publicKey != nil {
+		requestBody, err = cryptoutil.Encrypt(compressedBody, a.publicKey)
+		if err != nil {
+			return err
+		}
+	}
 
 	return a.doWithRetry(ctx, func() error {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.address+"/updates/", bytes.NewReader(compressedBody))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.address+"/updates/", bytes.NewReader(requestBody))
 		if err != nil {
 			return err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Content-Encoding", "gzip")
+		if a.publicKey != nil {
+			req.Header.Set(cryptoutil.Header, cryptoutil.Algorithm)
+		}
 		if a.key != "" {
 			req.Header.Set(signature.Header, signature.Sum(compressedBody, a.key))
 		}

@@ -34,6 +34,7 @@ type ServerConfig struct {
 	FileStoragePath string
 	DatabaseDSN     string
 	Key             string
+	CryptoKey       string
 	AuditFile       string
 	AuditURL        string
 	FileStorage     bool
@@ -46,6 +47,7 @@ type AgentConfig struct {
 	ReportInterval time.Duration
 	PollInterval   time.Duration
 	Key            string
+	CryptoKey      string
 	RateLimit      int
 }
 
@@ -73,6 +75,7 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	fs.StringVar(&cfg.FileStoragePath, "f", cfg.FileStoragePath, "path to metrics storage file")
 	fs.StringVar(&cfg.DatabaseDSN, "d", cfg.DatabaseDSN, "database connection string")
 	fs.StringVar(&cfg.Key, "k", cfg.Key, "hash signature key")
+	fs.StringVar(&cfg.CryptoKey, "crypto-key", cfg.CryptoKey, "private key file")
 	fs.BoolVar(&cfg.Restore, "r", cfg.Restore, "restore metrics from file on startup")
 	fs.StringVar(&cfg.AuditFile, "audit-file", cfg.AuditFile, "audit log file")
 	fs.StringVar(&cfg.AuditURL, "audit-url", cfg.AuditURL, "audit receiver URL")
@@ -110,6 +113,9 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	}
 	if value, ok := lookup("KEY"); ok && value != "" {
 		cfg.Key = value
+	}
+	if value, ok := lookup("CRYPTO_KEY"); ok && value != "" {
+		cfg.CryptoKey = value
 	}
 	if value, ok := lookup("AUDIT_FILE"); ok && value != "" {
 		cfg.AuditFile = value
@@ -152,6 +158,7 @@ func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 	fs.IntVar(&reportIntervalSeconds, "r", reportIntervalSeconds, "report interval in seconds")
 	fs.IntVar(&pollIntervalSeconds, "p", pollIntervalSeconds, "poll interval in seconds")
 	fs.StringVar(&cfg.Key, "k", cfg.Key, "hash signature key")
+	fs.StringVar(&cfg.CryptoKey, "crypto-key", cfg.CryptoKey, "public key file")
 	fs.IntVar(&cfg.RateLimit, "l", cfg.RateLimit, "maximum concurrent requests")
 
 	if err := fs.Parse(args); err != nil {
@@ -191,6 +198,9 @@ func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 	}
 	if value, ok := lookup("KEY"); ok && value != "" {
 		cfg.Key = value
+	}
+	if value, ok := lookup("CRYPTO_KEY"); ok && value != "" {
+		cfg.CryptoKey = value
 	}
 	if value, ok := lookup("RATE_LIMIT"); ok && value != "" {
 		rateLimit, err := strconv.Atoi(value)

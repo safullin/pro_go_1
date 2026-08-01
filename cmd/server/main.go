@@ -14,6 +14,8 @@ import (
 	"github.com/safullin/pro_go_1/internal/audit"
 	"github.com/safullin/pro_go_1/internal/buildinfo"
 	"github.com/safullin/pro_go_1/internal/config"
+	"github.com/safullin/pro_go_1/internal/cryptoutil"
+	"github.com/safullin/pro_go_1/internal/middleware"
 	"github.com/safullin/pro_go_1/internal/repository"
 	"github.com/safullin/pro_go_1/internal/server"
 )
@@ -35,6 +37,16 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	var decryptMiddleware func(http.Handler) http.Handler
+	if cfg.CryptoKey != "" {
+		privateKey, err := cryptoutil.LoadPrivateKey(cfg.CryptoKey)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		decryptMiddleware = middleware.Decrypt(privateKey)
+	}
 
 	observers := make([]audit.Observer, 0, 2)
 	if cfg.AuditFile != "" {
@@ -82,6 +94,9 @@ func main() {
 		handler = server.NewServerWithKeyAndAudit(storage, cfg.Key, auditor)
 	} else {
 		handler = server.NewServerWithKeyAndAudit(repository.NewMemStorage(), cfg.Key, auditor)
+	}
+	if decryptMiddleware != nil {
+		handler = decryptMiddleware(handler)
 	}
 
 	srv := &http.Server{
