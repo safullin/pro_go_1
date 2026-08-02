@@ -31,6 +31,15 @@ git fetch template && git checkout template/v2 .github
 
 Подробнее про локальный и автоматический запуск читайте в [README автотестов](https://github.com/Yandex-Practicum/go-autotests).
 
+## Информация о сборке
+
+По умолчанию агент и сервер выводят `N/A` для версии, даты и коммита. Значения можно задать при компиляции через `-ldflags`:
+
+```sh
+go build -ldflags "-X main.buildVersion=v1.0.0 -X main.buildDate=2026-08-01 -X main.buildCommit=abcdef1" -o agent ./cmd/agent
+go build -ldflags "-X main.buildVersion=v1.0.0 -X main.buildDate=2026-08-01 -X main.buildCommit=abcdef1" -o server ./cmd/server
+```
+
 ## Структура проекта
 
 Приведённая в этом репозитории структура проекта является рекомендуемой, но не обязательной.

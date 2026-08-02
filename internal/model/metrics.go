@@ -12,6 +12,7 @@ const (
 	RandomValueMetric = "RandomValue"
 )
 
+// generate:reset
 // Metrics описывает JSON-представление метрики для API.
 type Metrics struct {
 	ID    string   `json:"id"`
