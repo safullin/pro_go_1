@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/safullin/pro_go_1/internal/audit"
 	"github.com/safullin/pro_go_1/internal/buildinfo"
@@ -25,6 +26,8 @@ var (
 	buildDate    = "N/A"
 	buildCommit  = "N/A"
 )
+
+const gracefulShutdownTimeout = 5 * time.Second
 
 func main() {
 	buildinfo.Print(os.Stdout, buildVersion, buildDate, buildCommit)
@@ -138,6 +141,10 @@ func main() {
 }
 
 func runServer(ctx context.Context, srv *http.Server, listener net.Listener) error {
+	return runServerWithShutdownTimeout(ctx, srv, listener, gracefulShutdownTimeout)
+}
+
+func runServerWithShutdownTimeout(ctx context.Context, srv *http.Server, listener net.Listener, timeout time.Duration) error {
 	serveErrors := make(chan error, 1)
 	go func() {
 		serveErrors <- srv.Serve(listener)
@@ -150,7 +157,9 @@ func runServer(ctx context.Context, srv *http.Server, listener net.Listener) err
 		}
 		return err
 	case <-ctx.Done():
-		shutdownErr := srv.Shutdown(context.Background())
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		shutdownErr := srv.Shutdown(shutdownCtx)
 		serveErr := <-serveErrors
 		if errors.Is(serveErr, http.ErrServerClosed) {
 			serveErr = nil

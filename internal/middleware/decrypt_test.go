@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,19 @@ import (
 	"github.com/safullin/pro_go_1/internal/cryptoutil"
 	"github.com/safullin/pro_go_1/internal/middleware"
 )
+
+type failingBody struct {
+	closed bool
+}
+
+func (b *failingBody) Read([]byte) (int, error) {
+	return 0, errors.New("read error")
+}
+
+func (b *failingBody) Close() error {
+	b.closed = true
+	return nil
+}
 
 func TestDecrypt(t *testing.T) {
 	privateKey := generateRSAKey(t)
@@ -56,6 +70,27 @@ func TestDecryptRejectsInvalidBody(t *testing.T) {
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
+func TestDecryptClosesBodyOnReadError(t *testing.T) {
+	privateKey := generateRSAKey(t)
+	handler := middleware.Decrypt(privateKey)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("handler called after body read error")
+	}))
+	body := &failingBody{}
+	request := httptest.NewRequest(http.MethodPost, "/updates/", nil)
+	request.Body = body
+	request.Header.Set(cryptoutil.Header, cryptoutil.Algorithm)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	if !body.closed {
+		t.Fatal("request body was not closed")
 	}
 }
 

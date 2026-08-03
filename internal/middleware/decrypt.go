@@ -28,11 +28,11 @@ func Decrypt(privateKey *rsa.PrivateKey) func(http.Handler) http.Handler {
 			}
 
 			body, err := io.ReadAll(r.Body)
+			_ = r.Body.Close()
 			if err != nil {
 				http.Error(w, "read encrypted body error", http.StatusBadRequest)
 				return
 			}
-			_ = r.Body.Close()
 
 			decrypted, err := cryptoutil.Decrypt(body, privateKey)
 			if err != nil {

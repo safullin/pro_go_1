@@ -75,6 +75,8 @@ type blockingDoer struct {
 	started     chan struct{}
 	release     chan struct{}
 	canceled    chan struct{}
+	mu          sync.Mutex
+	calls       int
 	startOnce   sync.Once
 	releaseOnce sync.Once
 	cancelOnce  sync.Once
@@ -89,6 +91,9 @@ func newBlockingDoer() *blockingDoer {
 }
 
 func (d *blockingDoer) Do(req *http.Request) (*http.Response, error) {
+	d.mu.Lock()
+	d.calls++
+	d.mu.Unlock()
 	d.startOnce.Do(func() {
 		close(d.started)
 	})
@@ -111,6 +116,12 @@ func (d *blockingDoer) Release() {
 	d.releaseOnce.Do(func() {
 		close(d.release)
 	})
+}
+
+func (d *blockingDoer) Calls() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
 }
 
 func TestRefreshMetrics(t *testing.T) {
@@ -322,12 +333,13 @@ func TestRunSendsFinalReportOnShutdown(t *testing.T) {
 	}
 }
 
-func TestRunWaitsForInFlightReportOnShutdown(t *testing.T) {
+func TestRunRetriesInFlightReportOnShutdown(t *testing.T) {
 	client := newBlockingDoer()
 	defer client.Release()
 	metricsAgent := New("http://localhost:8080", time.Hour, time.Millisecond)
 	metricsAgent.client = client
 	metricsAgent.systemReader = stubSystemReader{}
+	metricsAgent.deliveryTimeout = time.Second
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runDone := make(chan struct{})
@@ -345,12 +357,12 @@ func TestRunWaitsForInFlightReportOnShutdown(t *testing.T) {
 
 	select {
 	case <-client.canceled:
-		t.Fatal("in-flight report context was canceled")
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(time.Second):
+		t.Fatal("in-flight report was not canceled")
 	}
 	select {
 	case <-runDone:
-		t.Fatal("agent stopped before in-flight report completed")
+		t.Fatal("agent stopped before final report completed")
 	default:
 	}
 
@@ -359,6 +371,40 @@ func TestRunWaitsForInFlightReportOnShutdown(t *testing.T) {
 	case <-runDone:
 	case <-time.After(time.Second):
 		t.Fatal("agent did not stop after reports completed")
+	}
+	if calls := client.Calls(); calls < 2 {
+		t.Fatalf("requests = %d, want at least 2", calls)
+	}
+	if got := metricsAgent.counters[model.PollCountMetric]; got != 0 {
+		t.Fatalf("PollCount = %d, want 0 after final report", got)
+	}
+}
+
+func TestRunLimitsFinalReportDelivery(t *testing.T) {
+	client := newBlockingDoer()
+	defer client.Release()
+	metricsAgent := New("http://localhost:8080", time.Hour, time.Hour)
+	metricsAgent.client = client
+	metricsAgent.systemReader = stubSystemReader{}
+	metricsAgent.deliveryTimeout = 20 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		metricsAgent.Run(ctx)
+	}()
+
+	select {
+	case <-client.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("final report context was not canceled")
+	}
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("agent did not stop after final report timeout")
 	}
 }
 

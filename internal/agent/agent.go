@@ -78,24 +78,28 @@ type reportJob struct {
 	counters map[string]int64
 }
 
-const reportQueueMultiplier = 2
+const (
+	reportQueueMultiplier  = 2
+	defaultDeliveryTimeout = 30 * time.Second
+)
 
 // Agent собирает runtime-метрики и отправляет их на сервер.
 type Agent struct {
-	address        string
-	pollInterval   time.Duration
-	reportInterval time.Duration
-	key            string
-	publicKey      *rsa.PublicKey
-	rateLimit      int
-	retryDelays    []time.Duration
-	client         HTTPDoer
-	reader         RuntimeReader
-	systemReader   SystemReader
-	randomValue    func() float64
-	mu             sync.RWMutex
-	gauges         map[string]float64
-	counters       map[string]int64
+	address         string
+	pollInterval    time.Duration
+	reportInterval  time.Duration
+	key             string
+	publicKey       *rsa.PublicKey
+	rateLimit       int
+	retryDelays     []time.Duration
+	deliveryTimeout time.Duration
+	client          HTTPDoer
+	reader          RuntimeReader
+	systemReader    SystemReader
+	randomValue     func() float64
+	mu              sync.RWMutex
+	gauges          map[string]float64
+	counters        map[string]int64
 }
 
 // New создаёт нового агента.
@@ -106,12 +110,13 @@ func New(address string, pollInterval, reportInterval time.Duration, keys ...str
 	}
 
 	return &Agent{
-		address:        address,
-		pollInterval:   pollInterval,
-		reportInterval: reportInterval,
-		key:            key,
-		rateLimit:      1,
-		retryDelays:    []time.Duration{time.Second, 3 * time.Second, 5 * time.Second},
+		address:         address,
+		pollInterval:    pollInterval,
+		reportInterval:  reportInterval,
+		key:             key,
+		rateLimit:       1,
+		retryDelays:     []time.Duration{time.Second, 3 * time.Second, 5 * time.Second},
+		deliveryTimeout: defaultDeliveryTimeout,
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -141,12 +146,11 @@ func (a *Agent) Run(ctx context.Context) {
 	a.refreshMetrics()
 	a.refreshSystemMetrics()
 
-	deliveryCtx := context.WithoutCancel(ctx)
 	jobs := make(chan reportJob, a.rateLimit*reportQueueMultiplier)
 	var workers sync.WaitGroup
 	for i := 0; i < a.rateLimit; i++ {
 		workers.Add(1)
-		go a.reportWorker(deliveryCtx, &workers, jobs)
+		go a.reportWorker(ctx, &workers, jobs)
 	}
 
 	var collectors sync.WaitGroup
@@ -165,6 +169,8 @@ func (a *Agent) Run(ctx context.Context) {
 	close(jobs)
 	workers.Wait()
 
+	deliveryCtx, cancelDelivery := context.WithTimeout(context.WithoutCancel(ctx), a.deliveryTimeout)
+	defer cancelDelivery()
 	finalJob := a.buildReportJob()
 	if len(finalJob.metrics) > 0 {
 		a.sendReportJob(deliveryCtx, finalJob)

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 )
@@ -72,5 +73,71 @@ func TestRunServerWaitsForActiveRequest(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("server did not stop")
+	}
+}
+
+func TestRunServerStopsAfterShutdownTimeout(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseRequest)
+		})
+	}
+	defer release()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(requestStarted)
+		<-releaseRequest
+		w.WriteHeader(http.StatusOK)
+	})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	server := &http.Server{Handler: handler}
+	ctx, cancel := context.WithCancel(context.Background())
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- runServerWithShutdownTimeout(ctx, server, listener, 20*time.Millisecond)
+	}()
+
+	requestDone := make(chan error, 1)
+	go func() {
+		response, err := http.Get("http://" + listener.Addr().String())
+		if err != nil {
+			requestDone <- err
+			return
+		}
+		_, readErr := io.Copy(io.Discard, response.Body)
+		closeErr := response.Body.Close()
+		requestDone <- errors.Join(readErr, closeErr)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("request did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-serverDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("runServer() error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop after shutdown timeout")
+	}
+
+	release()
+	select {
+	case err := <-requestDone:
+		if err != nil {
+			t.Fatalf("request error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request did not finish after release")
 	}
 }
