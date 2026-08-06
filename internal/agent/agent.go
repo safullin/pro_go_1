@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/safullin/pro_go_1/internal/cryptoutil"
 	"github.com/safullin/pro_go_1/internal/model"
 	"github.com/safullin/pro_go_1/internal/retry"
 	"github.com/safullin/pro_go_1/internal/signature"
@@ -76,23 +78,28 @@ type reportJob struct {
 	counters map[string]int64
 }
 
-const reportQueueMultiplier = 2
+const (
+	reportQueueMultiplier  = 2
+	defaultDeliveryTimeout = 30 * time.Second
+)
 
 // Agent собирает runtime-метрики и отправляет их на сервер.
 type Agent struct {
-	address        string
-	pollInterval   time.Duration
-	reportInterval time.Duration
-	key            string
-	rateLimit      int
-	retryDelays    []time.Duration
-	client         HTTPDoer
-	reader         RuntimeReader
-	systemReader   SystemReader
-	randomValue    func() float64
-	mu             sync.RWMutex
-	gauges         map[string]float64
-	counters       map[string]int64
+	address         string
+	pollInterval    time.Duration
+	reportInterval  time.Duration
+	key             string
+	publicKey       *rsa.PublicKey
+	rateLimit       int
+	retryDelays     []time.Duration
+	deliveryTimeout time.Duration
+	client          HTTPDoer
+	reader          RuntimeReader
+	systemReader    SystemReader
+	randomValue     func() float64
+	mu              sync.RWMutex
+	gauges          map[string]float64
+	counters        map[string]int64
 }
 
 // New создаёт нового агента.
@@ -103,12 +110,13 @@ func New(address string, pollInterval, reportInterval time.Duration, keys ...str
 	}
 
 	return &Agent{
-		address:        address,
-		pollInterval:   pollInterval,
-		reportInterval: reportInterval,
-		key:            key,
-		rateLimit:      1,
-		retryDelays:    []time.Duration{time.Second, 3 * time.Second, 5 * time.Second},
+		address:         address,
+		pollInterval:    pollInterval,
+		reportInterval:  reportInterval,
+		key:             key,
+		rateLimit:       1,
+		retryDelays:     []time.Duration{time.Second, 3 * time.Second, 5 * time.Second},
+		deliveryTimeout: defaultDeliveryTimeout,
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -118,6 +126,11 @@ func New(address string, pollInterval, reportInterval time.Duration, keys ...str
 		gauges:       make(map[string]float64),
 		counters:     make(map[string]int64),
 	}
+}
+
+// SetPublicKey задаёт публичный ключ для шифрования запросов.
+func (a *Agent) SetPublicKey(key *rsa.PublicKey) {
+	a.publicKey = key
 }
 
 // SetRateLimit задаёт максимальное число одновременных исходящих запросов.
@@ -155,6 +168,13 @@ func (a *Agent) Run(ctx context.Context) {
 	collectors.Wait()
 	close(jobs)
 	workers.Wait()
+
+	deliveryCtx, cancelDelivery := context.WithTimeout(context.WithoutCancel(ctx), a.deliveryTimeout)
+	defer cancelDelivery()
+	finalJob := a.buildReportJob()
+	if len(finalJob.metrics) > 0 {
+		a.sendReportJob(deliveryCtx, finalJob)
+	}
 }
 
 func (a *Agent) collectRuntimeMetrics(ctx context.Context) {
@@ -220,16 +240,8 @@ func enqueueReportJob(ctx context.Context, jobs chan<- reportJob, job reportJob)
 func (a *Agent) reportWorker(ctx context.Context, wg *sync.WaitGroup, jobs <-chan reportJob) {
 	defer wg.Done()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case job, ok := <-jobs:
-			if !ok {
-				return
-			}
-			a.sendReportJob(ctx, job)
-		}
+	for job := range jobs {
+		a.sendReportJob(ctx, job)
 	}
 }
 
@@ -376,14 +388,24 @@ func (a *Agent) sendMetrics(ctx context.Context, metrics []model.Metrics) error 
 	if err != nil {
 		return err
 	}
+	requestBody := compressedBody
+	if a.publicKey != nil {
+		requestBody, err = cryptoutil.Encrypt(compressedBody, a.publicKey)
+		if err != nil {
+			return err
+		}
+	}
 
 	return a.doWithRetry(ctx, func() error {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.address+"/updates/", bytes.NewReader(compressedBody))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.address+"/updates/", bytes.NewReader(requestBody))
 		if err != nil {
 			return err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Content-Encoding", "gzip")
+		if a.publicKey != nil {
+			req.Header.Set(cryptoutil.Header, cryptoutil.Algorithm)
+		}
 		if a.key != "" {
 			req.Header.Set(signature.Header, signature.Sum(compressedBody, a.key))
 		}

@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,9 +13,11 @@ import (
 	"net/http/httptest"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/safullin/pro_go_1/internal/cryptoutil"
 	"github.com/safullin/pro_go_1/internal/model"
 	"github.com/safullin/pro_go_1/internal/signature"
 )
@@ -64,6 +69,59 @@ func (d *statusDoer) Do(*http.Request) (*http.Response, error) {
 		StatusCode: d.statusCode,
 		Body:       io.NopCloser(strings.NewReader("")),
 	}, nil
+}
+
+type blockingDoer struct {
+	started     chan struct{}
+	release     chan struct{}
+	canceled    chan struct{}
+	mu          sync.Mutex
+	calls       int
+	startOnce   sync.Once
+	releaseOnce sync.Once
+	cancelOnce  sync.Once
+}
+
+func newBlockingDoer() *blockingDoer {
+	return &blockingDoer{
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+		canceled: make(chan struct{}),
+	}
+}
+
+func (d *blockingDoer) Do(req *http.Request) (*http.Response, error) {
+	d.mu.Lock()
+	d.calls++
+	d.mu.Unlock()
+	d.startOnce.Do(func() {
+		close(d.started)
+	})
+	select {
+	case <-d.release:
+		return &http.Response{
+			Status:     http.StatusText(http.StatusOK),
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("")),
+		}, nil
+	case <-req.Context().Done():
+		d.cancelOnce.Do(func() {
+			close(d.canceled)
+		})
+		return nil, req.Context().Err()
+	}
+}
+
+func (d *blockingDoer) Release() {
+	d.releaseOnce.Do(func() {
+		close(d.release)
+	})
+}
+
+func (d *blockingDoer) Calls() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
 }
 
 func TestRefreshMetrics(t *testing.T) {
@@ -257,6 +315,99 @@ func TestReportMetricsSkipsEmptyBatch(t *testing.T) {
 	}
 }
 
+func TestRunSendsFinalReportOnShutdown(t *testing.T) {
+	client := &statusDoer{statusCode: http.StatusOK}
+	metricsAgent := New("http://localhost:8080", time.Hour, time.Hour)
+	metricsAgent.client = client
+	metricsAgent.systemReader = stubSystemReader{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	metricsAgent.Run(ctx)
+
+	if client.calls != 1 {
+		t.Fatalf("requests = %d, want 1 final report", client.calls)
+	}
+	if got := metricsAgent.counters[model.PollCountMetric]; got != 0 {
+		t.Fatalf("PollCount = %d, want 0 after final report", got)
+	}
+}
+
+func TestRunRetriesInFlightReportOnShutdown(t *testing.T) {
+	client := newBlockingDoer()
+	defer client.Release()
+	metricsAgent := New("http://localhost:8080", time.Hour, time.Millisecond)
+	metricsAgent.client = client
+	metricsAgent.systemReader = stubSystemReader{}
+	metricsAgent.deliveryTimeout = time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		metricsAgent.Run(ctx)
+	}()
+
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("report did not start")
+	}
+	cancel()
+
+	select {
+	case <-client.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight report was not canceled")
+	}
+	select {
+	case <-runDone:
+		t.Fatal("agent stopped before final report completed")
+	default:
+	}
+
+	client.Release()
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("agent did not stop after reports completed")
+	}
+	if calls := client.Calls(); calls < 2 {
+		t.Fatalf("requests = %d, want at least 2", calls)
+	}
+	if got := metricsAgent.counters[model.PollCountMetric]; got != 0 {
+		t.Fatalf("PollCount = %d, want 0 after final report", got)
+	}
+}
+
+func TestRunLimitsFinalReportDelivery(t *testing.T) {
+	client := newBlockingDoer()
+	defer client.Release()
+	metricsAgent := New("http://localhost:8080", time.Hour, time.Hour)
+	metricsAgent.client = client
+	metricsAgent.systemReader = stubSystemReader{}
+	metricsAgent.deliveryTimeout = 20 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		metricsAgent.Run(ctx)
+	}()
+
+	select {
+	case <-client.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("final report context was not canceled")
+	}
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("agent did not stop after final report timeout")
+	}
+}
+
 func TestSendMetricsRetriesTemporaryTransportErrors(t *testing.T) {
 	client := &retryDoer{failures: 2}
 	metricsAgent := New("http://localhost:8080", time.Second, time.Second)
@@ -336,4 +487,64 @@ func TestSendMetricsSignsRequest(t *testing.T) {
 	if !signature.Valid(gotBody, key, gotHash) {
 		t.Fatalf("invalid hash header: %q", gotHash)
 	}
+}
+
+func TestSendMetricsEncryptsRequest(t *testing.T) {
+	const key = "secret"
+	privateKey := generateAgentRSAKey(t)
+	var received []model.Metrics
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(cryptoutil.Header); got != cryptoutil.Algorithm {
+			t.Fatalf("encryption header = %q, want %q", got, cryptoutil.Algorithm)
+		}
+		encrypted, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read encrypted body: %v", err)
+		}
+		compressed, err := cryptoutil.Decrypt(encrypted, privateKey)
+		if err != nil {
+			t.Fatalf("decrypt body: %v", err)
+		}
+		if !signature.Valid(compressed, key, r.Header.Get(signature.Header)) {
+			t.Fatal("request signature is invalid")
+		}
+
+		reader, err := gzip.NewReader(bytes.NewReader(compressed))
+		if err != nil {
+			t.Fatalf("open gzip body: %v", err)
+		}
+		defer reader.Close()
+		if err := json.NewDecoder(reader).Decode(&received); err != nil {
+			t.Fatalf("decode metrics: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	metricsAgent := New(server.URL, time.Second, time.Second, key)
+	metricsAgent.SetPublicKey(&privateKey.PublicKey)
+	value := 100.5
+	err := metricsAgent.sendMetrics(context.Background(), []model.Metrics{
+		{
+			ID:    "Alloc",
+			MType: model.Gauge,
+			Value: &value,
+		},
+	})
+	if err != nil {
+		t.Fatalf("send metrics: %v", err)
+	}
+	if len(received) != 1 || received[0].ID != "Alloc" {
+		t.Fatalf("received metrics = %#v", received)
+	}
+}
+
+func generateAgentRSAKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
+	return key
 }
