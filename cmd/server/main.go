@@ -12,12 +12,16 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/safullin/pro_go_1/internal/audit"
 	"github.com/safullin/pro_go_1/internal/buildinfo"
 	"github.com/safullin/pro_go_1/internal/config"
 	"github.com/safullin/pro_go_1/internal/cryptoutil"
+	grpcapi "github.com/safullin/pro_go_1/internal/grpcserver"
 	"github.com/safullin/pro_go_1/internal/handler"
 	"github.com/safullin/pro_go_1/internal/middleware"
+	metricspb "github.com/safullin/pro_go_1/internal/proto"
 	"github.com/safullin/pro_go_1/internal/repository"
 	"github.com/safullin/pro_go_1/internal/server"
 )
@@ -133,11 +137,32 @@ func main() {
 		Handler: httpHandler,
 	}
 
-	listener, err := net.Listen("tcp", cfg.Address)
+	var (
+		grpcServer   *grpc.Server
+		grpcListener net.Listener
+	)
+	if cfg.GRPCAddress != "" {
+		interceptor, err := grpcapi.TrustedSubnetInterceptor(cfg.TrustedSubnet)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		grpcListener, err = net.Listen("tcp", cfg.GRPCAddress)
+		if err != nil {
+			log.Fatal(err)
+		}
+		grpcServer = grpc.NewServer(grpc.UnaryInterceptor(interceptor))
+		metricspb.RegisterMetricsServer(grpcServer, grpcapi.New(metricsStorage, auditor))
+	}
+
+	httpListener, err := net.Listen("tcp", cfg.Address)
 	if err != nil {
+		if grpcListener != nil {
+			_ = grpcListener.Close()
+		}
 		log.Fatal(err)
 	}
-	serveErr := runServer(ctx, srv, listener)
+	serveErr := runServers(ctx, srv, httpListener, grpcServer, grpcListener)
 	stop()
 
 	if persistenceDone != nil {
@@ -153,8 +178,70 @@ func main() {
 	}
 }
 
+func runServers(ctx context.Context, httpServer *http.Server, httpListener net.Listener, grpcServer *grpc.Server, grpcListener net.Listener) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	serverCount := 1
+	errorsChannel := make(chan error, 2)
+	go func() {
+		errorsChannel <- runServer(runCtx, httpServer, httpListener)
+	}()
+	if grpcServer != nil && grpcListener != nil {
+		serverCount++
+		go func() {
+			errorsChannel <- runGRPCServer(runCtx, grpcServer, grpcListener)
+		}()
+	}
+
+	serveErr := <-errorsChannel
+	cancel()
+	for i := 1; i < serverCount; i++ {
+		serveErr = errors.Join(serveErr, <-errorsChannel)
+	}
+	return serveErr
+}
+
 func runServer(ctx context.Context, srv *http.Server, listener net.Listener) error {
 	return runServerWithShutdownTimeout(ctx, srv, listener, gracefulShutdownTimeout)
+}
+
+func runGRPCServer(ctx context.Context, srv *grpc.Server, listener net.Listener) error {
+	return runGRPCServerWithShutdownTimeout(ctx, srv, listener, gracefulShutdownTimeout)
+}
+
+func runGRPCServerWithShutdownTimeout(ctx context.Context, srv *grpc.Server, listener net.Listener, timeout time.Duration) error {
+	serveErrors := make(chan error, 1)
+	go func() {
+		serveErrors <- srv.Serve(listener)
+	}()
+
+	select {
+	case err := <-serveErrors:
+		if errors.Is(err, grpc.ErrServerStopped) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			srv.GracefulStop()
+		}()
+		timer := time.NewTimer(timeout)
+		select {
+		case <-stopped:
+			timer.Stop()
+		case <-timer.C:
+			srv.Stop()
+			<-stopped
+		}
+		serveErr := <-serveErrors
+		if errors.Is(serveErr, grpc.ErrServerStopped) {
+			return nil
+		}
+		return serveErr
+	}
 }
 
 func runServerWithShutdownTimeout(ctx context.Context, srv *http.Server, listener net.Listener, timeout time.Duration) error {

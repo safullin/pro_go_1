@@ -7,10 +7,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	"github.com/safullin/pro_go_1/internal/agent"
 	"github.com/safullin/pro_go_1/internal/buildinfo"
 	"github.com/safullin/pro_go_1/internal/config"
 	"github.com/safullin/pro_go_1/internal/cryptoutil"
+	metricspb "github.com/safullin/pro_go_1/internal/proto"
 )
 
 var (
@@ -38,6 +42,15 @@ func main() {
 
 	metricsAgent := agent.New(cfg.Address, cfg.PollInterval, cfg.ReportInterval, cfg.Key)
 	metricsAgent.SetRateLimit(cfg.RateLimit)
+	if cfg.GRPCAddress != "" {
+		connection, err := grpc.NewClient(cfg.GRPCAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		defer connection.Close()
+		metricsAgent.SetGRPCClient(metricspb.NewMetricsClient(connection))
+	}
 	if cfg.CryptoKey != "" {
 		publicKey, err := cryptoutil.LoadPublicKey(cfg.CryptoKey)
 		if err != nil {

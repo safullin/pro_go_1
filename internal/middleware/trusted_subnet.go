@@ -1,26 +1,21 @@
 package middleware
 
 import (
-	"fmt"
-	"net"
 	"net/http"
+
+	"github.com/safullin/pro_go_1/internal/trustedsubnet"
 )
 
 // TrustedSubnet ограничивает доступ адресами из указанной подсети.
 func TrustedSubnet(cidr string) (func(http.Handler) http.Handler, error) {
-	if cidr == "" {
-		return func(next http.Handler) http.Handler { return next }, nil
-	}
-
-	_, subnet, err := net.ParseCIDR(cidr)
+	filter, err := trustedsubnet.New(cidr)
 	if err != nil {
-		return nil, fmt.Errorf("parse trusted subnet: %w", err)
+		return nil, err
 	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := net.ParseIP(r.Header.Get("X-Real-IP"))
-			if ip == nil || !subnet.Contains(ip) {
+			if !filter.Allows(r.Header.Get("X-Real-IP")) {
 				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 				return
 			}

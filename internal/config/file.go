@@ -12,6 +12,7 @@ import (
 
 type serverFileConfig struct {
 	Address       *string `json:"address"`
+	GRPCAddress   *string `json:"grpc_address"`
 	Restore       *bool   `json:"restore"`
 	StoreInterval *string `json:"store_interval"`
 	StoreFile     *string `json:"store_file"`
@@ -25,6 +26,7 @@ type serverFileConfig struct {
 
 type agentFileConfig struct {
 	Address        *string `json:"address"`
+	GRPCAddress    *string `json:"grpc_address"`
 	ReportInterval *string `json:"report_interval"`
 	PollInterval   *string `json:"poll_interval"`
 	Key            *string `json:"key"`
@@ -39,6 +41,9 @@ func loadServerFileConfig(path string, cfg *ServerConfig) error {
 	}
 	if fileConfig.Address != nil {
 		cfg.Address = *fileConfig.Address
+	}
+	if fileConfig.GRPCAddress != nil {
+		cfg.GRPCAddress = *fileConfig.GRPCAddress
 	}
 	if fileConfig.Restore != nil {
 		cfg.Restore = *fileConfig.Restore
@@ -85,6 +90,9 @@ func loadAgentFileConfig(path string, cfg *AgentConfig) error {
 	}
 	if fileConfig.Address != nil {
 		cfg.Address = *fileConfig.Address
+	}
+	if fileConfig.GRPCAddress != nil {
+		cfg.GRPCAddress = *fileConfig.GRPCAddress
 	}
 	if fileConfig.ReportInterval != nil {
 		interval, err := time.ParseDuration(*fileConfig.ReportInterval)

@@ -32,9 +32,10 @@ func TestParseServerConfig(t *testing.T) {
 		},
 		{
 			name: "custom address",
-			args: []string{"-a=localhost:9090", "-i=10", "-f=/tmp/metrics.json", "-d=postgres://user:pass@localhost/db", "-k=secret", "-crypto-key=/tmp/private.pem", "-r=false", "--audit-file=/tmp/audit.log", "--audit-url=https://audit.example/events", "-t=192.0.2.0/24"},
+			args: []string{"-a=localhost:9090", "-g=localhost:3200", "-i=10", "-f=/tmp/metrics.json", "-d=postgres://user:pass@localhost/db", "-k=secret", "-crypto-key=/tmp/private.pem", "-r=false", "--audit-file=/tmp/audit.log", "--audit-url=https://audit.example/events", "-t=192.0.2.0/24"},
 			want: ServerConfig{
 				Address:         "localhost:9090",
+				GRPCAddress:     "localhost:3200",
 				StoreInterval:   10 * time.Second,
 				FileStoragePath: "/tmp/metrics.json",
 				DatabaseDSN:     "postgres://user:pass@localhost/db",
@@ -52,6 +53,7 @@ func TestParseServerConfig(t *testing.T) {
 			args: []string{"-a=localhost:9090", "-i=10", "-f=/tmp/metrics.json", "-r=false"},
 			env: map[string]string{
 				"ADDRESS":           "localhost:9191",
+				"GRPC_ADDRESS":      "localhost:3300",
 				"STORE_INTERVAL":    "5",
 				"FILE_STORAGE_PATH": "/var/tmp/metrics.json",
 				"DATABASE_DSN":      "postgres://postgres:postgres@localhost/praktikum",
@@ -64,6 +66,7 @@ func TestParseServerConfig(t *testing.T) {
 			},
 			want: ServerConfig{
 				Address:         "localhost:9191",
+				GRPCAddress:     "localhost:3300",
 				StoreInterval:   5 * time.Second,
 				FileStoragePath: "/var/tmp/metrics.json",
 				DatabaseDSN:     "postgres://postgres:postgres@localhost/praktikum",
@@ -149,9 +152,10 @@ func TestParseAgentConfig(t *testing.T) {
 		},
 		{
 			name: "custom values",
-			args: []string{"-a=localhost:9090", "-r=3", "-p=1", "-k=secret", "-crypto-key=/tmp/public.pem", "-l=7"},
+			args: []string{"-a=localhost:9090", "-g=localhost:3200", "-r=3", "-p=1", "-k=secret", "-crypto-key=/tmp/public.pem", "-l=7"},
 			want: AgentConfig{
 				Address:        "http://localhost:9090",
+				GRPCAddress:    "localhost:3200",
 				ReportInterval: 3 * time.Second,
 				PollInterval:   1 * time.Second,
 				Key:            "secret",
@@ -164,6 +168,7 @@ func TestParseAgentConfig(t *testing.T) {
 			args: []string{"-a=localhost:9090", "-r=3", "-p=1", "-l=2"},
 			env: map[string]string{
 				"ADDRESS":         "localhost:9191",
+				"GRPC_ADDRESS":    "localhost:3300",
 				"REPORT_INTERVAL": "5",
 				"POLL_INTERVAL":   "4",
 				"KEY":             "env-secret",
@@ -172,6 +177,7 @@ func TestParseAgentConfig(t *testing.T) {
 			},
 			want: AgentConfig{
 				Address:        "http://localhost:9191",
+				GRPCAddress:    "localhost:3300",
 				ReportInterval: 5 * time.Second,
 				PollInterval:   4 * time.Second,
 				Key:            "env-secret",

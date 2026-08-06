@@ -4,11 +4,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/safullin/pro_go_1/internal/trustedsubnet"
 )
 
 const (
@@ -31,6 +32,7 @@ const (
 // ServerConfig хранит параметры запуска HTTP-сервера.
 type ServerConfig struct {
 	Address         string
+	GRPCAddress     string
 	StoreInterval   time.Duration
 	FileStoragePath string
 	DatabaseDSN     string
@@ -46,6 +48,7 @@ type ServerConfig struct {
 // AgentConfig хранит параметры запуска агента.
 type AgentConfig struct {
 	Address        string
+	GRPCAddress    string
 	ReportInterval time.Duration
 	PollInterval   time.Duration
 	Key            string
@@ -78,6 +81,7 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&cfg.Address, "a", cfg.Address, "HTTP server address")
+	fs.StringVar(&cfg.GRPCAddress, "g", cfg.GRPCAddress, "gRPC server address")
 	fs.IntVar(&storeIntervalSeconds, "i", storeIntervalSeconds, "store interval in seconds")
 	fs.StringVar(&cfg.FileStoragePath, "f", cfg.FileStoragePath, "path to metrics storage file")
 	fs.StringVar(&cfg.DatabaseDSN, "d", cfg.DatabaseDSN, "database connection string")
@@ -110,6 +114,9 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	}
 	if value, ok := lookup("ADDRESS"); ok && value != "" {
 		cfg.Address = value
+	}
+	if value, ok := lookup("GRPC_ADDRESS"); ok {
+		cfg.GRPCAddress = value
 	}
 	if value, ok := lookup("STORE_INTERVAL"); ok && value != "" {
 		seconds, err := strconv.Atoi(value)
@@ -155,7 +162,7 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 		cfg.Restore = restore
 	}
 	if cfg.TrustedSubnet != "" {
-		if _, _, err := net.ParseCIDR(cfg.TrustedSubnet); err != nil {
+		if _, err := trustedsubnet.New(cfg.TrustedSubnet); err != nil {
 			return ServerConfig{}, fmt.Errorf("invalid trusted subnet: %w", err)
 		}
 	}
@@ -187,6 +194,7 @@ func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&cfg.Address, "a", cfg.Address, "HTTP server address")
+	fs.StringVar(&cfg.GRPCAddress, "g", cfg.GRPCAddress, "gRPC server address")
 	fs.IntVar(&reportIntervalSeconds, "r", reportIntervalSeconds, "report interval in seconds")
 	fs.IntVar(&pollIntervalSeconds, "p", pollIntervalSeconds, "poll interval in seconds")
 	fs.StringVar(&cfg.Key, "k", cfg.Key, "hash signature key")
@@ -225,6 +233,9 @@ func parseAgentConfig(args []string, lookup envLookup) (AgentConfig, error) {
 	}
 	if value, ok := lookup("ADDRESS"); ok && value != "" {
 		cfg.Address = value
+	}
+	if value, ok := lookup("GRPC_ADDRESS"); ok {
+		cfg.GRPCAddress = value
 	}
 	if value, ok := lookup("REPORT_INTERVAL"); ok && value != "" {
 		seconds, err := strconv.Atoi(value)
