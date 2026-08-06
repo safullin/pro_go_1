@@ -196,6 +196,9 @@ func TestReportMetrics(t *testing.T) {
 		if got := r.Header.Get("Content-Encoding"); got != "gzip" {
 			t.Fatalf("unexpected content encoding: got %q want %q", got, "gzip")
 		}
+		if got := r.Header.Get("X-Real-IP"); got != "192.0.2.10" {
+			t.Fatalf("unexpected real IP: got %q want %q", got, "192.0.2.10")
+		}
 
 		zr, err := gzip.NewReader(r.Body)
 		if err != nil {
@@ -212,6 +215,7 @@ func TestReportMetrics(t *testing.T) {
 	defer server.Close()
 
 	metricsAgent := New(server.URL, time.Second, time.Second)
+	metricsAgent.realIP = "192.0.2.10"
 	metricsAgent.gauges["Alloc"] = 100.5
 	metricsAgent.counters["PollCount"] = 4
 

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -37,6 +38,7 @@ type ServerConfig struct {
 	CryptoKey       string
 	AuditFile       string
 	AuditURL        string
+	TrustedSubnet   string
 	FileStorage     bool
 	Restore         bool
 }
@@ -84,6 +86,7 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	fs.BoolVar(&cfg.Restore, "r", cfg.Restore, "restore metrics from file on startup")
 	fs.StringVar(&cfg.AuditFile, "audit-file", cfg.AuditFile, "audit log file")
 	fs.StringVar(&cfg.AuditURL, "audit-url", cfg.AuditURL, "audit receiver URL")
+	fs.StringVar(&cfg.TrustedSubnet, "t", cfg.TrustedSubnet, "trusted subnet")
 	fs.StringVar(&configFile, "c", configFile, "config file")
 	fs.StringVar(&configFile, "config", configFile, "config file")
 
@@ -141,12 +144,20 @@ func parseServerConfig(args []string, lookup envLookup) (ServerConfig, error) {
 	if value, ok := lookup("AUDIT_URL"); ok && value != "" {
 		cfg.AuditURL = value
 	}
+	if value, ok := lookup("TRUSTED_SUBNET"); ok {
+		cfg.TrustedSubnet = value
+	}
 	if value, ok := lookup("RESTORE"); ok && value != "" {
 		restore, err := strconv.ParseBool(value)
 		if err != nil {
 			return ServerConfig{}, fmt.Errorf("invalid restore flag: %w", err)
 		}
 		cfg.Restore = restore
+	}
+	if cfg.TrustedSubnet != "" {
+		if _, _, err := net.ParseCIDR(cfg.TrustedSubnet); err != nil {
+			return ServerConfig{}, fmt.Errorf("invalid trusted subnet: %w", err)
+		}
 	}
 
 	return cfg, nil

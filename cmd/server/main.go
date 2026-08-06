@@ -16,6 +16,7 @@ import (
 	"github.com/safullin/pro_go_1/internal/buildinfo"
 	"github.com/safullin/pro_go_1/internal/config"
 	"github.com/safullin/pro_go_1/internal/cryptoutil"
+	"github.com/safullin/pro_go_1/internal/handler"
 	"github.com/safullin/pro_go_1/internal/middleware"
 	"github.com/safullin/pro_go_1/internal/repository"
 	"github.com/safullin/pro_go_1/internal/server"
@@ -77,7 +78,8 @@ func main() {
 	defer auditor.Close()
 
 	var (
-		handler         http.Handler
+		metricsStorage  repository.MetricsRepository
+		pinger          handler.Pinger
 		persistenceDone <-chan struct{}
 		flushStorage    func() error
 	)
@@ -90,7 +92,8 @@ func main() {
 		}
 		defer storage.Close()
 
-		handler = server.NewServerWithKeyAndAudit(storage, cfg.Key, auditor, storage)
+		metricsStorage = storage
+		pinger = storage
 	} else if cfg.FileStorage {
 		storage := repository.NewPersistentStorage(cfg.FileStoragePath, cfg.StoreInterval == 0)
 		if cfg.Restore {
@@ -107,17 +110,27 @@ func main() {
 			defer close(done)
 			storage.RunPersistencePeriodically(ctx, cfg.StoreInterval)
 		}()
-		handler = server.NewServerWithKeyAndAudit(storage, cfg.Key, auditor)
+		metricsStorage = storage
 	} else {
-		handler = server.NewServerWithKeyAndAudit(repository.NewMemStorage(), cfg.Key, auditor)
+		metricsStorage = repository.NewMemStorage()
+	}
+	httpHandler, err := server.NewServerWithOptions(metricsStorage, server.Options{
+		Key:           cfg.Key,
+		TrustedSubnet: cfg.TrustedSubnet,
+		Auditor:       auditor,
+		Pinger:        pinger,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	if decryptMiddleware != nil {
-		handler = decryptMiddleware(handler)
+		httpHandler = decryptMiddleware(httpHandler)
 	}
 
 	srv := &http.Server{
 		Addr:    cfg.Address,
-		Handler: handler,
+		Handler: httpHandler,
 	}
 
 	listener, err := net.Listen("tcp", cfg.Address)

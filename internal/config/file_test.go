@@ -17,7 +17,8 @@ func TestServerJSONConfig(t *testing.T) {
 		"key": "config-signature",
 		"crypto_key": "/tmp/config-private.pem",
 		"audit_file": "/tmp/config-audit.log",
-		"audit_url": "https://audit.example/config"
+		"audit_url": "https://audit.example/config",
+		"trusted_subnet": "203.0.113.0/24"
 	}`)
 
 	got, err := parseServerConfig([]string{"-config=" + path}, envMap(nil))
@@ -33,6 +34,7 @@ func TestServerJSONConfig(t *testing.T) {
 		CryptoKey:       "/tmp/config-private.pem",
 		AuditFile:       "/tmp/config-audit.log",
 		AuditURL:        "https://audit.example/config",
+		TrustedSubnet:   "203.0.113.0/24",
 		FileStorage:     true,
 		Restore:         false,
 	}
@@ -73,7 +75,8 @@ func TestJSONConfigPriority(t *testing.T) {
 		"address": "localhost:9000",
 		"store_interval": "10s",
 		"store_file": "/tmp/config.json",
-		"crypto_key": "/tmp/config-private.pem"
+		"crypto_key": "/tmp/config-private.pem",
+		"trusted_subnet": "192.0.2.0/24"
 	}`)
 	serverConfig, err := parseServerConfig(
 		[]string{
@@ -84,12 +87,13 @@ func TestJSONConfigPriority(t *testing.T) {
 			"-crypto-key=/tmp/flag-private.pem",
 		},
 		envMap(map[string]string{
-			"ADDRESS":      "localhost:9002",
-			"STORE_FILE":   "/tmp/env.json",
-			"CRYPTO_KEY":   "/tmp/env-private.pem",
-			"CONFIG":       serverPath,
-			"AUDIT_FILE":   "/tmp/env-audit.log",
-			"DATABASE_DSN": "postgres://env",
+			"ADDRESS":        "localhost:9002",
+			"STORE_FILE":     "/tmp/env.json",
+			"CRYPTO_KEY":     "/tmp/env-private.pem",
+			"CONFIG":         serverPath,
+			"AUDIT_FILE":     "/tmp/env-audit.log",
+			"DATABASE_DSN":   "postgres://env",
+			"TRUSTED_SUBNET": "",
 		}),
 	)
 	if err != nil {
@@ -106,6 +110,9 @@ func TestJSONConfigPriority(t *testing.T) {
 	}
 	if serverConfig.CryptoKey != "/tmp/env-private.pem" {
 		t.Errorf("crypto key = %q, want env value", serverConfig.CryptoKey)
+	}
+	if serverConfig.TrustedSubnet != "" {
+		t.Errorf("trusted subnet = %q, want empty env value", serverConfig.TrustedSubnet)
 	}
 
 	agentPath := writeConfigFile(t, `{

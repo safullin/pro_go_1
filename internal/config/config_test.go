@@ -32,7 +32,7 @@ func TestParseServerConfig(t *testing.T) {
 		},
 		{
 			name: "custom address",
-			args: []string{"-a=localhost:9090", "-i=10", "-f=/tmp/metrics.json", "-d=postgres://user:pass@localhost/db", "-k=secret", "-crypto-key=/tmp/private.pem", "-r=false", "--audit-file=/tmp/audit.log", "--audit-url=https://audit.example/events"},
+			args: []string{"-a=localhost:9090", "-i=10", "-f=/tmp/metrics.json", "-d=postgres://user:pass@localhost/db", "-k=secret", "-crypto-key=/tmp/private.pem", "-r=false", "--audit-file=/tmp/audit.log", "--audit-url=https://audit.example/events", "-t=192.0.2.0/24"},
 			want: ServerConfig{
 				Address:         "localhost:9090",
 				StoreInterval:   10 * time.Second,
@@ -42,6 +42,7 @@ func TestParseServerConfig(t *testing.T) {
 				CryptoKey:       "/tmp/private.pem",
 				AuditFile:       "/tmp/audit.log",
 				AuditURL:        "https://audit.example/events",
+				TrustedSubnet:   "192.0.2.0/24",
 				FileStorage:     true,
 				Restore:         false,
 			},
@@ -58,6 +59,7 @@ func TestParseServerConfig(t *testing.T) {
 				"CRYPTO_KEY":        "/var/tmp/private.pem",
 				"AUDIT_FILE":        "/var/tmp/audit.log",
 				"AUDIT_URL":         "https://audit.example/events",
+				"TRUSTED_SUBNET":    "198.51.100.0/24",
 				"RESTORE":           "true",
 			},
 			want: ServerConfig{
@@ -69,6 +71,7 @@ func TestParseServerConfig(t *testing.T) {
 				CryptoKey:       "/var/tmp/private.pem",
 				AuditFile:       "/var/tmp/audit.log",
 				AuditURL:        "https://audit.example/events",
+				TrustedSubnet:   "198.51.100.0/24",
 				FileStorage:     true,
 				Restore:         true,
 			},
@@ -93,6 +96,11 @@ func TestParseServerConfig(t *testing.T) {
 			env: map[string]string{
 				"RESTORE": "nope",
 			},
+			wantErr: true,
+		},
+		{
+			name:    "invalid trusted subnet",
+			args:    []string{"-t=not-a-subnet"},
 			wantErr: true,
 		},
 		{

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"runtime"
 	"strings"
@@ -94,6 +95,7 @@ type Agent struct {
 	retryDelays     []time.Duration
 	deliveryTimeout time.Duration
 	client          HTTPDoer
+	realIP          string
 	reader          RuntimeReader
 	systemReader    SystemReader
 	randomValue     func() float64
@@ -120,6 +122,7 @@ func New(address string, pollInterval, reportInterval time.Duration, keys ...str
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
+		realIP:       localIP(),
 		reader:       runtimeReader{},
 		systemReader: gopsutilSystemReader{},
 		randomValue:  rand.Float64,
@@ -403,6 +406,9 @@ func (a *Agent) sendMetrics(ctx context.Context, metrics []model.Metrics) error 
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Content-Encoding", "gzip")
+		if a.realIP != "" {
+			req.Header.Set("X-Real-IP", a.realIP)
+		}
 		if a.publicKey != nil {
 			req.Header.Set(cryptoutil.Header, cryptoutil.Algorithm)
 		}
@@ -422,6 +428,20 @@ func (a *Agent) sendMetrics(ctx context.Context, metrics []model.Metrics) error 
 		}
 		return nil
 	})
+}
+
+func localIP() string {
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		return "127.0.0.1"
+	}
+	for _, address := range addresses {
+		ip, _, err := net.ParseCIDR(address.String())
+		if err == nil && ip.IsGlobalUnicast() && ip.To4() != nil {
+			return ip.String()
+		}
+	}
+	return "127.0.0.1"
 }
 
 func (a *Agent) doWithRetry(ctx context.Context, operation func() error) error {

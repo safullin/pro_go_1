@@ -20,6 +20,7 @@ type serverFileConfig struct {
 	CryptoKey     *string `json:"crypto_key"`
 	AuditFile     *string `json:"audit_file"`
 	AuditURL      *string `json:"audit_url"`
+	TrustedSubnet *string `json:"trusted_subnet"`
 }
 
 type agentFileConfig struct {
@@ -70,6 +71,9 @@ func loadServerFileConfig(path string, cfg *ServerConfig) error {
 	}
 	if fileConfig.AuditURL != nil {
 		cfg.AuditURL = *fileConfig.AuditURL
+	}
+	if fileConfig.TrustedSubnet != nil {
+		cfg.TrustedSubnet = *fileConfig.TrustedSubnet
 	}
 	return nil
 }
