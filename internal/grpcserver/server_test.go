@@ -2,7 +2,9 @@ package grpcserver
 
 import (
 	"context"
+	"errors"
 	"net"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -12,9 +14,19 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/safullin/pro_go_1/internal/model"
 	metricspb "github.com/safullin/pro_go_1/internal/proto"
 	"github.com/safullin/pro_go_1/internal/repository"
 )
+
+type failingStorage struct {
+	repository.MetricsRepository
+	err error
+}
+
+func (s failingStorage) UpdateMetrics(context.Context, []model.Metrics) ([]model.Metrics, error) {
+	return nil, s.err
+}
 
 func TestUpdateMetrics(t *testing.T) {
 	storage := repository.NewMemStorage()
@@ -61,6 +73,24 @@ func TestUpdateMetricsAllowsEmptySubnet(t *testing.T) {
 	}
 }
 
+func TestUpdateMetricsIncludesStorageError(t *testing.T) {
+	storageErr := errors.New("database connection lost")
+	service := New(failingStorage{
+		MetricsRepository: repository.NewMemStorage(),
+		err:               storageErr,
+	}, nil)
+
+	_, err := service.UpdateMetrics(context.Background(), &metricspb.UpdateMetricsRequest{Metrics: []*metricspb.Metric{
+		{Id: "Alloc", Type: metricspb.Metric_GAUGE, Value: 100.5},
+	}})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("status = %s, want %s", status.Code(err), codes.Internal)
+	}
+	if !strings.Contains(err.Error(), storageErr.Error()) {
+		t.Fatalf("error = %q, want storage error", err)
+	}
+}
+
 func newTestClient(t *testing.T, storage repository.MetricsRepository, cidr string) metricspb.MetricsClient {
 	t.Helper()
 	listener := bufconn.Listen(1024 * 1024)
@@ -69,7 +99,7 @@ func newTestClient(t *testing.T, storage repository.MetricsRepository, cidr stri
 		t.Fatalf("TrustedSubnetInterceptor() error: %v", err)
 	}
 	server := grpc.NewServer(grpc.UnaryInterceptor(interceptor))
-	metricspb.RegisterMetricsServer(server, New(storage))
+	metricspb.RegisterMetricsServer(server, New(storage, nil))
 	go func() {
 		_ = server.Serve(listener)
 	}()

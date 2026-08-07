@@ -36,11 +36,16 @@ const gracefulShutdownTimeout = 5 * time.Second
 
 func main() {
 	buildinfo.Print(os.Stdout, buildVersion, buildDate, buildCommit)
-
-	cfg, err := config.ParseServerConfig(os.Args[1:])
-	if err != nil {
+	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		os.Exit(1)
+	}
+}
+
+func run(args []string) (runErr error) {
+	cfg, err := config.ParseServerConfig(args)
+	if err != nil {
+		return fmt.Errorf("parse server config: %w", err)
 	}
 
 	ctx, stop := signal.NotifyContext(
@@ -55,8 +60,7 @@ func main() {
 	if cfg.CryptoKey != "" {
 		privateKey, err := cryptoutil.LoadPrivateKey(cfg.CryptoKey)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return fmt.Errorf("load private key: %w", err)
 		}
 		decryptMiddleware = middleware.Decrypt(privateKey)
 	}
@@ -65,8 +69,7 @@ func main() {
 	if cfg.AuditFile != "" {
 		fileObserver, err := audit.NewFileObserver(cfg.AuditFile)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return fmt.Errorf("create audit file observer: %w", err)
 		}
 		defer func() {
 			if err := fileObserver.Close(); err != nil {
@@ -82,19 +85,18 @@ func main() {
 	defer auditor.Close()
 
 	var (
-		metricsStorage  repository.MetricsRepository
-		pinger          handler.Pinger
-		persistenceDone <-chan struct{}
-		flushStorage    func() error
+		metricsStorage repository.MetricsRepository
+		pinger         handler.Pinger
 	)
 
 	if cfg.DatabaseDSN != "" {
 		storage, err := repository.NewPostgresStorage(ctx, cfg.DatabaseDSN)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return fmt.Errorf("create postgres storage: %w", err)
 		}
-		defer storage.Close()
+		defer func() {
+			runErr = errors.Join(runErr, storage.Close())
+		}()
 
 		metricsStorage = storage
 		pinger = storage
@@ -102,17 +104,21 @@ func main() {
 		storage := repository.NewPersistentStorage(cfg.FileStoragePath, cfg.StoreInterval == 0)
 		if cfg.Restore {
 			if err := storage.RestoreFromFile(); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+				return fmt.Errorf("restore metrics: %w", err)
 			}
 		}
 
 		done := make(chan struct{})
-		persistenceDone = done
-		flushStorage = storage.Save
 		go func() {
 			defer close(done)
 			storage.RunPersistencePeriodically(ctx, cfg.StoreInterval)
+		}()
+		defer func() {
+			stop()
+			<-done
+			if err := storage.Save(); err != nil {
+				runErr = errors.Join(runErr, fmt.Errorf("save metrics on shutdown: %w", err))
+			}
 		}()
 		metricsStorage = storage
 	} else {
@@ -125,8 +131,7 @@ func main() {
 		Pinger:        pinger,
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return fmt.Errorf("create HTTP server: %w", err)
 	}
 	if decryptMiddleware != nil {
 		httpHandler = decryptMiddleware(httpHandler)
@@ -144,38 +149,23 @@ func main() {
 	if cfg.GRPCAddress != "" {
 		interceptor, err := grpcapi.TrustedSubnetInterceptor(cfg.TrustedSubnet)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return fmt.Errorf("create trusted subnet interceptor: %w", err)
 		}
 		grpcListener, err = net.Listen("tcp", cfg.GRPCAddress)
 		if err != nil {
-			log.Fatal(err)
+			return fmt.Errorf("listen gRPC: %w", err)
 		}
+		defer grpcListener.Close()
 		grpcServer = grpc.NewServer(grpc.UnaryInterceptor(interceptor))
 		metricspb.RegisterMetricsServer(grpcServer, grpcapi.New(metricsStorage, auditor))
 	}
 
 	httpListener, err := net.Listen("tcp", cfg.Address)
 	if err != nil {
-		if grpcListener != nil {
-			_ = grpcListener.Close()
-		}
-		log.Fatal(err)
+		return fmt.Errorf("listen HTTP: %w", err)
 	}
-	serveErr := runServers(ctx, srv, httpListener, grpcServer, grpcListener)
-	stop()
-
-	if persistenceDone != nil {
-		<-persistenceDone
-	}
-	if flushStorage != nil {
-		if err := flushStorage(); err != nil {
-			log.Printf("save metrics on shutdown: %v", err)
-		}
-	}
-	if serveErr != nil {
-		log.Fatal(serveErr)
-	}
+	defer httpListener.Close()
+	return runServers(ctx, srv, httpListener, grpcServer, grpcListener)
 }
 
 func runServers(ctx context.Context, httpServer *http.Server, httpListener net.Listener, grpcServer *grpc.Server, grpcListener net.Listener) error {

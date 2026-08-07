@@ -11,6 +11,34 @@ import (
 	"time"
 )
 
+func TestRunClosesGRPCListenerOnHTTPListenError(t *testing.T) {
+	occupiedHTTP, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen HTTP: %v", err)
+	}
+	defer occupiedHTTP.Close()
+
+	availableGRPC, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen gRPC: %v", err)
+	}
+	grpcAddress := availableGRPC.Addr().String()
+	if err := availableGRPC.Close(); err != nil {
+		t.Fatalf("close gRPC probe: %v", err)
+	}
+
+	err = run([]string{"-a=" + occupiedHTTP.Addr().String(), "-g=" + grpcAddress, "-f="})
+	if err == nil {
+		t.Fatal("run() error = nil, want HTTP listen error")
+	}
+
+	reopenedGRPC, err := net.Listen("tcp", grpcAddress)
+	if err != nil {
+		t.Fatalf("gRPC listener was not closed: %v", err)
+	}
+	_ = reopenedGRPC.Close()
+}
+
 func TestRunServerWaitsForActiveRequest(t *testing.T) {
 	requestStarted := make(chan struct{})
 	releaseRequest := make(chan struct{})

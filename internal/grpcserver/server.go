@@ -22,11 +22,7 @@ type Server struct {
 }
 
 // New создаёт gRPC-сервис поверх хранилища метрик.
-func New(storage repository.MetricsRepository, auditors ...*audit.Publisher) *Server {
-	var auditor *audit.Publisher
-	if len(auditors) > 0 {
-		auditor = auditors[0]
-	}
+func New(storage repository.MetricsRepository, auditor *audit.Publisher) *Server {
 	return &Server{storage: storage, auditor: auditor}
 }
 
@@ -56,7 +52,7 @@ func (s *Server) UpdateMetrics(ctx context.Context, request *metricspb.UpdateMet
 	}
 
 	if _, err := s.storage.UpdateMetrics(ctx, metrics); err != nil {
-		return nil, status.Error(codes.Internal, "failed to update metrics")
+		return nil, status.Errorf(codes.Internal, "failed to update metrics: %v", err)
 	}
 	if s.auditor != nil && len(names) > 0 {
 		s.auditor.Publish(ctx, audit.Event{

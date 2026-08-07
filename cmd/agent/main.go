@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -25,11 +26,16 @@ var (
 
 func main() {
 	buildinfo.Print(os.Stdout, buildVersion, buildDate, buildCommit)
-
-	cfg, err := config.ParseAgentConfig(os.Args[1:])
-	if err != nil {
+	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		os.Exit(1)
+	}
+}
+
+func run(args []string) (runErr error) {
+	cfg, err := config.ParseAgentConfig(args)
+	if err != nil {
+		return fmt.Errorf("parse agent config: %w", err)
 	}
 
 	ctx, stop := signal.NotifyContext(
@@ -45,19 +51,20 @@ func main() {
 	if cfg.GRPCAddress != "" {
 		connection, err := grpc.NewClient(cfg.GRPCAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return fmt.Errorf("create gRPC client: %w", err)
 		}
-		defer connection.Close()
+		defer func() {
+			runErr = errors.Join(runErr, connection.Close())
+		}()
 		metricsAgent.SetGRPCClient(metricspb.NewMetricsClient(connection))
 	}
 	if cfg.CryptoKey != "" {
 		publicKey, err := cryptoutil.LoadPublicKey(cfg.CryptoKey)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return fmt.Errorf("load public key: %w", err)
 		}
 		metricsAgent.SetPublicKey(publicKey)
 	}
 	metricsAgent.Run(ctx)
+	return nil
 }
