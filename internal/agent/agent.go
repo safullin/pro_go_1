@@ -11,14 +11,20 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
 	"github.com/safullin/pro_go_1/internal/cryptoutil"
 	"github.com/safullin/pro_go_1/internal/model"
+	metricspb "github.com/safullin/pro_go_1/internal/proto"
 	"github.com/safullin/pro_go_1/internal/retry"
 	"github.com/safullin/pro_go_1/internal/signature"
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -94,6 +100,8 @@ type Agent struct {
 	retryDelays     []time.Duration
 	deliveryTimeout time.Duration
 	client          HTTPDoer
+	grpcClient      metricspb.MetricsClient
+	realIP          string
 	reader          RuntimeReader
 	systemReader    SystemReader
 	randomValue     func() float64
@@ -120,6 +128,7 @@ func New(address string, pollInterval, reportInterval time.Duration, keys ...str
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
+		realIP:       localIP(),
 		reader:       runtimeReader{},
 		systemReader: gopsutilSystemReader{},
 		randomValue:  rand.Float64,
@@ -131,6 +140,11 @@ func New(address string, pollInterval, reportInterval time.Duration, keys ...str
 // SetPublicKey задаёт публичный ключ для шифрования запросов.
 func (a *Agent) SetPublicKey(key *rsa.PublicKey) {
 	a.publicKey = key
+}
+
+// SetGRPCClient задаёт клиент для отправки метрик по gRPC.
+func (a *Agent) SetGRPCClient(client metricspb.MetricsClient) {
+	a.grpcClient = client
 }
 
 // SetRateLimit задаёт максимальное число одновременных исходящих запросов.
@@ -380,6 +394,13 @@ func copyCounters(counters map[string]int64) map[string]int64 {
 }
 
 func (a *Agent) sendMetrics(ctx context.Context, metrics []model.Metrics) error {
+	if a.grpcClient != nil {
+		return a.sendGRPCMetrics(ctx, metrics)
+	}
+	return a.sendHTTPMetrics(ctx, metrics)
+}
+
+func (a *Agent) sendHTTPMetrics(ctx context.Context, metrics []model.Metrics) error {
 	body, err := json.Marshal(metrics)
 	if err != nil {
 		return err
@@ -403,6 +424,9 @@ func (a *Agent) sendMetrics(ctx context.Context, metrics []model.Metrics) error 
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Content-Encoding", "gzip")
+		if a.realIP != "" {
+			req.Header.Set("X-Real-IP", a.realIP)
+		}
 		if a.publicKey != nil {
 			req.Header.Set(cryptoutil.Header, cryptoutil.Algorithm)
 		}
@@ -422,6 +446,49 @@ func (a *Agent) sendMetrics(ctx context.Context, metrics []model.Metrics) error 
 		}
 		return nil
 	})
+}
+
+func (a *Agent) sendGRPCMetrics(ctx context.Context, metrics []model.Metrics) error {
+	request := &metricspb.UpdateMetricsRequest{Metrics: make([]*metricspb.Metric, 0, len(metrics))}
+	for _, metric := range metrics {
+		encoded := &metricspb.Metric{Id: metric.ID}
+		switch metric.MType {
+		case model.Gauge:
+			encoded.Type = metricspb.Metric_GAUGE
+			if metric.Value != nil {
+				encoded.Value = *metric.Value
+			}
+		case model.Counter:
+			encoded.Type = metricspb.Metric_COUNTER
+			if metric.Delta != nil {
+				encoded.Delta = *metric.Delta
+			}
+		}
+		request.Metrics = append(request.Metrics, encoded)
+	}
+
+	return a.doWithRetry(ctx, func() error {
+		requestContext := ctx
+		if a.realIP != "" {
+			requestContext = metadata.AppendToOutgoingContext(ctx, "x-real-ip", a.realIP)
+		}
+		_, err := a.grpcClient.UpdateMetrics(requestContext, request)
+		return err
+	})
+}
+
+func localIP() string {
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		return "127.0.0.1"
+	}
+	for _, address := range addresses {
+		ip, _, err := net.ParseCIDR(address.String())
+		if err == nil && ip.IsGlobalUnicast() && ip.To4() != nil {
+			return ip.String()
+		}
+	}
+	return "127.0.0.1"
 }
 
 func (a *Agent) doWithRetry(ctx context.Context, operation func() error) error {
@@ -446,7 +513,18 @@ func isRetriableAgentError(err error) bool {
 	if errors.As(err, &statusErr) {
 		return false
 	}
-	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if grpcStatus, ok := status.FromError(err); ok {
+		switch grpcStatus.Code() {
+		case codes.Unavailable, codes.ResourceExhausted, codes.Aborted:
+			return true
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 type serverStatusError struct {

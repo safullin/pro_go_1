@@ -17,8 +17,14 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
 	"github.com/safullin/pro_go_1/internal/cryptoutil"
 	"github.com/safullin/pro_go_1/internal/model"
+	metricspb "github.com/safullin/pro_go_1/internal/proto"
 	"github.com/safullin/pro_go_1/internal/signature"
 )
 
@@ -60,6 +66,28 @@ func (d *retryDoer) Do(*http.Request) (*http.Response, error) {
 type statusDoer struct {
 	statusCode int
 	calls      int
+}
+
+type stubGRPCClient struct {
+	request  *metricspb.UpdateMetricsRequest
+	realIP   string
+	failures int
+	calls    int
+}
+
+func (c *stubGRPCClient) UpdateMetrics(ctx context.Context, request *metricspb.UpdateMetricsRequest, _ ...grpc.CallOption) (*metricspb.UpdateMetricsResponse, error) {
+	c.calls++
+	c.request = request
+	if values, ok := metadata.FromOutgoingContext(ctx); ok {
+		addresses := values.Get("x-real-ip")
+		if len(addresses) > 0 {
+			c.realIP = addresses[0]
+		}
+	}
+	if c.calls <= c.failures {
+		return nil, status.Error(codes.Unavailable, "temporarily unavailable")
+	}
+	return &metricspb.UpdateMetricsResponse{}, nil
 }
 
 func (d *statusDoer) Do(*http.Request) (*http.Response, error) {
@@ -196,6 +224,9 @@ func TestReportMetrics(t *testing.T) {
 		if got := r.Header.Get("Content-Encoding"); got != "gzip" {
 			t.Fatalf("unexpected content encoding: got %q want %q", got, "gzip")
 		}
+		if got := r.Header.Get("X-Real-IP"); got != "192.0.2.10" {
+			t.Fatalf("unexpected real IP: got %q want %q", got, "192.0.2.10")
+		}
 
 		zr, err := gzip.NewReader(r.Body)
 		if err != nil {
@@ -212,6 +243,7 @@ func TestReportMetrics(t *testing.T) {
 	defer server.Close()
 
 	metricsAgent := New(server.URL, time.Second, time.Second)
+	metricsAgent.realIP = "192.0.2.10"
 	metricsAgent.gauges["Alloc"] = 100.5
 	metricsAgent.counters["PollCount"] = 4
 
@@ -427,6 +459,39 @@ func TestSendMetricsRetriesTemporaryTransportErrors(t *testing.T) {
 	}
 	if client.calls != 3 {
 		t.Fatalf("unexpected attempts count: got %d want %d", client.calls, 3)
+	}
+}
+
+func TestSendMetricsGRPC(t *testing.T) {
+	client := &stubGRPCClient{failures: 1}
+	metricsAgent := New("http://localhost:8080", time.Second, time.Second)
+	metricsAgent.SetGRPCClient(client)
+	metricsAgent.realIP = "192.0.2.10"
+	metricsAgent.retryDelays = []time.Duration{0}
+
+	value := 100.5
+	delta := int64(4)
+	err := metricsAgent.sendMetrics(context.Background(), []model.Metrics{
+		{ID: "Alloc", MType: model.Gauge, Value: &value},
+		{ID: "PollCount", MType: model.Counter, Delta: &delta},
+	})
+	if err != nil {
+		t.Fatalf("sendMetrics() error: %v", err)
+	}
+	if client.calls != 2 {
+		t.Fatalf("calls = %d, want 2", client.calls)
+	}
+	if client.realIP != "192.0.2.10" {
+		t.Fatalf("x-real-ip = %q, want %q", client.realIP, "192.0.2.10")
+	}
+	if len(client.request.GetMetrics()) != 2 {
+		t.Fatalf("metrics count = %d, want 2", len(client.request.GetMetrics()))
+	}
+	if metric := client.request.GetMetrics()[0]; metric.GetId() != "Alloc" || metric.GetType() != metricspb.Metric_GAUGE || metric.GetValue() != 100.5 {
+		t.Fatalf("unexpected gauge: %#v", metric)
+	}
+	if metric := client.request.GetMetrics()[1]; metric.GetId() != "PollCount" || metric.GetType() != metricspb.Metric_COUNTER || metric.GetDelta() != 4 {
+		t.Fatalf("unexpected counter: %#v", metric)
 	}
 }
 

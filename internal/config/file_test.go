@@ -10,6 +10,7 @@ import (
 func TestServerJSONConfig(t *testing.T) {
 	path := writeConfigFile(t, `{
 		"address": "localhost:9090",
+		"grpc_address": "localhost:3200",
 		"restore": false,
 		"store_interval": "1500ms",
 		"store_file": "/tmp/config-metrics.json",
@@ -17,7 +18,8 @@ func TestServerJSONConfig(t *testing.T) {
 		"key": "config-signature",
 		"crypto_key": "/tmp/config-private.pem",
 		"audit_file": "/tmp/config-audit.log",
-		"audit_url": "https://audit.example/config"
+		"audit_url": "https://audit.example/config",
+		"trusted_subnet": "203.0.113.0/24"
 	}`)
 
 	got, err := parseServerConfig([]string{"-config=" + path}, envMap(nil))
@@ -26,6 +28,7 @@ func TestServerJSONConfig(t *testing.T) {
 	}
 	want := ServerConfig{
 		Address:         "localhost:9090",
+		GRPCAddress:     "localhost:3200",
 		StoreInterval:   1500 * time.Millisecond,
 		FileStoragePath: "/tmp/config-metrics.json",
 		DatabaseDSN:     "postgres://config",
@@ -33,6 +36,7 @@ func TestServerJSONConfig(t *testing.T) {
 		CryptoKey:       "/tmp/config-private.pem",
 		AuditFile:       "/tmp/config-audit.log",
 		AuditURL:        "https://audit.example/config",
+		TrustedSubnet:   "203.0.113.0/24",
 		FileStorage:     true,
 		Restore:         false,
 	}
@@ -44,6 +48,7 @@ func TestServerJSONConfig(t *testing.T) {
 func TestAgentJSONConfig(t *testing.T) {
 	path := writeConfigFile(t, `{
 		"address": "localhost:9091",
+		"grpc_address": "localhost:3201",
 		"report_interval": "1500ms",
 		"poll_interval": "250ms",
 		"key": "config-signature",
@@ -57,6 +62,7 @@ func TestAgentJSONConfig(t *testing.T) {
 	}
 	want := AgentConfig{
 		Address:        "http://localhost:9091",
+		GRPCAddress:    "localhost:3201",
 		ReportInterval: 1500 * time.Millisecond,
 		PollInterval:   250 * time.Millisecond,
 		Key:            "config-signature",
@@ -71,25 +77,30 @@ func TestAgentJSONConfig(t *testing.T) {
 func TestJSONConfigPriority(t *testing.T) {
 	serverPath := writeConfigFile(t, `{
 		"address": "localhost:9000",
+		"grpc_address": "localhost:3200",
 		"store_interval": "10s",
 		"store_file": "/tmp/config.json",
-		"crypto_key": "/tmp/config-private.pem"
+		"crypto_key": "/tmp/config-private.pem",
+		"trusted_subnet": "192.0.2.0/24"
 	}`)
 	serverConfig, err := parseServerConfig(
 		[]string{
 			"-c=" + serverPath,
 			"-a=localhost:9001",
+			"-g=localhost:3201",
 			"-i=2",
 			"-f=/tmp/flag.json",
 			"-crypto-key=/tmp/flag-private.pem",
 		},
 		envMap(map[string]string{
-			"ADDRESS":      "localhost:9002",
-			"STORE_FILE":   "/tmp/env.json",
-			"CRYPTO_KEY":   "/tmp/env-private.pem",
-			"CONFIG":       serverPath,
-			"AUDIT_FILE":   "/tmp/env-audit.log",
-			"DATABASE_DSN": "postgres://env",
+			"ADDRESS":        "localhost:9002",
+			"GRPC_ADDRESS":   "localhost:3202",
+			"STORE_FILE":     "/tmp/env.json",
+			"CRYPTO_KEY":     "/tmp/env-private.pem",
+			"CONFIG":         serverPath,
+			"AUDIT_FILE":     "/tmp/env-audit.log",
+			"DATABASE_DSN":   "postgres://env",
+			"TRUSTED_SUBNET": "",
 		}),
 	)
 	if err != nil {
@@ -97,6 +108,9 @@ func TestJSONConfigPriority(t *testing.T) {
 	}
 	if serverConfig.Address != "localhost:9002" {
 		t.Errorf("server address = %q, want env value", serverConfig.Address)
+	}
+	if serverConfig.GRPCAddress != "localhost:3202" {
+		t.Errorf("gRPC address = %q, want env value", serverConfig.GRPCAddress)
 	}
 	if serverConfig.StoreInterval != 2*time.Second {
 		t.Errorf("store interval = %s, want flag value", serverConfig.StoreInterval)
@@ -107,9 +121,13 @@ func TestJSONConfigPriority(t *testing.T) {
 	if serverConfig.CryptoKey != "/tmp/env-private.pem" {
 		t.Errorf("crypto key = %q, want env value", serverConfig.CryptoKey)
 	}
+	if serverConfig.TrustedSubnet != "" {
+		t.Errorf("trusted subnet = %q, want empty env value", serverConfig.TrustedSubnet)
+	}
 
 	agentPath := writeConfigFile(t, `{
 		"address": "localhost:9100",
+		"grpc_address": "localhost:3300",
 		"report_interval": "10s",
 		"poll_interval": "10s",
 		"crypto_key": "/tmp/config-public.pem",
@@ -119,15 +137,17 @@ func TestJSONConfigPriority(t *testing.T) {
 		[]string{
 			"-config=" + agentPath,
 			"-a=localhost:9101",
+			"-g=localhost:3301",
 			"-r=3",
 			"-p=2",
 			"-crypto-key=/tmp/flag-public.pem",
 			"-l=4",
 		},
 		envMap(map[string]string{
-			"ADDRESS":    "localhost:9102",
-			"CRYPTO_KEY": "/tmp/env-public.pem",
-			"RATE_LIMIT": "5",
+			"ADDRESS":      "localhost:9102",
+			"GRPC_ADDRESS": "localhost:3302",
+			"CRYPTO_KEY":   "/tmp/env-public.pem",
+			"RATE_LIMIT":   "5",
 		}),
 	)
 	if err != nil {
@@ -135,6 +155,9 @@ func TestJSONConfigPriority(t *testing.T) {
 	}
 	if agentConfig.Address != "http://localhost:9102" {
 		t.Errorf("agent address = %q, want env value", agentConfig.Address)
+	}
+	if agentConfig.GRPCAddress != "localhost:3302" {
+		t.Errorf("gRPC address = %q, want env value", agentConfig.GRPCAddress)
 	}
 	if agentConfig.ReportInterval != 3*time.Second {
 		t.Errorf("report interval = %s, want flag value", agentConfig.ReportInterval)
